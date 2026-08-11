@@ -1,6 +1,36 @@
 // ============================================================
-// IMPORTS
+// WARHAMMER 40K ARMY BUILDER — App.jsx
 // ============================================================
+// Single-file React application. All UI, data, and logic live here.
+// Built with Vite (npm run dev → http://localhost:5173).
+// See README.md for full architecture overview, data shapes, and
+// instructions for adding new factions or detachments.
+//
+// Sections in this file (in order):
+//   1. Imports
+//   2. Firebase config (stubbed — see comments to activate)
+//   3. localStorage helpers
+//   4. Crusade data (ranks, honours, scars, requisitions, agendas)
+//   5. Stat modifier helpers
+//   6. Faction data (CSM, WE, SM, TYR)
+//   7. Faction registry
+//   8. Army builder helpers
+//   9. Shared UI components (StatBadge, WeaponRow)
+//  10. ArmyListManager component
+//  11. ArmyBuilder component (Tab 1 — ⚔)
+//  12. RulesReference component (Tab 2 — 📖)
+//  13. CrusadeUnitCard component
+//  14. CrusadeSection component (Tab 3 — 🎖)
+//  15. BattleLogSection component
+//  16. App root component (tab routing + header + nav)
+//  17. NarrativeHub component (Tab 4 — 🗺)
+// ============================================================
+
+// ── IMPORTS ──────────────────────────────────────────────────
+// Only React hooks — no external UI libraries.
+// useState:    local component state
+// useEffect:   side effects (storage sync, resize listeners)
+// useCallback: memoised callbacks to avoid unnecessary re-renders
 import { useState, useEffect, useCallback } from "react";
 
 // ============================================================
@@ -30,8 +60,17 @@ import { useState, useEffect, useCallback } from "react";
 // ============================================================
 // LOCAL STORAGE HELPERS
 // ============================================================
+// All persistence is browser-local (no server). Two independent
+// storage buckets:
+//   csm_army_lists_v4      — army builder lists (all factions)
+//   csm_crusade_rosters_v4 — crusade rosters (all factions)
+//
+// The _v4 suffix means saves from incompatible older versions
+// are silently ignored rather than causing parse errors.
+// Bump the suffix if you make a breaking change to the data shape.
+// ============================================================
 
-// Storage key for army lists
+// Storage key for army builder lists (covers all four factions)
 const STORAGE_KEY = "csm_army_lists_v4";
 // Storage key for crusade rosters (separate from army lists)
 const CRUSADE_STORAGE_KEY = "csm_crusade_rosters_v4";
@@ -78,11 +117,15 @@ const CRUSADE_RANKS = [
 ];
 
 // Returns the rank object for a given XP value.
+// Returns the rank object for a given XP total.
+// Scans CRUSADE_RANKS in reverse so the highest matching threshold wins.
 function getRank(xp) {
   return [...CRUSADE_RANKS].reverse().find((r) => xp >= r.minXP) || CRUSADE_RANKS[0];
 }
 
 // Returns the next rank object (or null if already at Legend).
+// Returns the next rank object above the current XP total,
+// or null if the unit is already at maximum rank (Legend).
 function getNextRank(xp) {
   const idx = CRUSADE_RANKS.findIndex((r) => r === getRank(xp));
   return idx < CRUSADE_RANKS.length - 1 ? CRUSADE_RANKS[idx + 1] : null;
@@ -567,10 +610,25 @@ const CRUSADE_AGENDAS = [
 // ============================================================
 // STAT MODIFIER HELPERS
 // ============================================================
+// applyStatModifiers() is a pure function — it takes a unit's
+// base stat block and a list of active honour/scar IDs, then
+// returns a new stat object with all modifiers applied, plus a
+// "deltas" map showing what changed (used to colour the badges).
+//
+// parseStatValue() / formatStatValue() handle the mixed types
+// in stat blocks — some values are numbers (T: 4), some are
+// strings with units (M: '6"'), some are strings (Sv: "3+").
+// ============================================================
 
 // Applies all active Battle Honours and Battle Scars modifiers to a unit's base stats,
 // returning a new stats object with modified values. Used to drive the live stat display.
 // Honours that buff stats are shown in green; scars that debuff are shown in red.
+// Pure function — computes a modified stat block from base stats plus
+// all active Battle Honours and Battle Scars.
+// Returns: { modifiedStats, deltas }
+//   modifiedStats — new stat object with all modifiers applied
+//   deltas        — map of stat key → numeric delta (positive = buff, negative = debuff)
+// Used by CrusadeUnitCard to drive the green/red delta badges.
 function applyStatModifiers(baseStats, activeHonourIds, activeScarIds) {
   // Clone the base stats — we never mutate the original
   const modified = { ...baseStats };
@@ -719,24 +777,110 @@ const WE_DATA = {
     description: "At the start of each battle round, roll 8D6. Spend matching dice to activate up to 2 Blessings of Khorne until end of battle round. Available Blessings: Rage-fuelled Invigoration (any pair → +2\" Move), Wrathful Onslaught (double 4+ → Lethal Hits melee), Merciless Butchers (double 5+ → Sustained Hits 1 melee), Savage Momentum (double 6+ → Pile In/Consolidate 6\"), Decapitating Strikes (triple 3+ → Devastating Wounds vs Infantry), Blood-mad Rampage (triple 4+ → re-roll Charge rolls).",
   },
   detachments: [
-    { name: "Berzerker Warband", dpCost: 2, forceDisposition: "Purge the Foe", rule: "Relentless Rage: Add 1\" to Pile In and Consolidate moves. Blood Tithe: Each time an enemy model is destroyed by a WE melee attack, add 1 to your Blood Tithe total." },
-    { name: "Cult of Blood", dpCost: 2, forceDisposition: "Purge the Foe", rule: "Frenzied Charge: Add D3\" to Charge rolls. Rush to the Fray: Friendly WE units within 6\" of an objective gain +1 to Charge rolls." },
-    { name: "Goretrack Onslaught", dpCost: 1, forceDisposition: "Disruption", rule: "Unstoppable Advance: Friendly WE VEHICLE units can move through terrain features that are not buildings." },
+    // ── 3 DP Detachments ──
+    {
+      name: "Berzerker Warband", dpCost: 3, forceDisposition: "Purge the Foe",
+      rule: "Relentless Rage: Each time a WORLD EATERS unit from your army makes a Charge move, until the end of the turn, add 1 to the Attacks characteristic and add 2 to the Strength characteristic of melee weapons equipped by models in that unit.",
+    },
+    // ── 2 DP Detachments ──
+    {
+      name: "Cult of Blood", dpCost: 2, forceDisposition: "Priority Assets",
+      rule: "Keywords + Idols of Khorne: JAKHALS and GOREMONGERS units have the BATTLELINE keyword. At the start of your Command phase, select one Idol of Khorne ability (once each per battle) — active for all WORLD EATERS TITANIC and MONSTER units until start of next Command phase: Idol of Infinite Rage (Aura) — friendly JAKHALS/GOREMONGERS within 6\" (9\" if TITANIC): +1 to Hit and +1 to Wound rolls. Idol of Burning Wrath (Aura) — friendly JAKHALS/GOREMONGERS within 6\" (9\" if TITANIC): +1\" Move, +1 to Advance and Charge rolls. Idol of Blessed Blood (Aura) — friendly JAKHALS/GOREMONGERS within 6\" (9\" if TITANIC): 4+ invulnerable save.",
+    },
+    {
+      name: "Goretrack Onslaught", dpCost: 2, forceDisposition: "Take and Hold",
+      rule: "Rush to the Fray: Each time a WORLD EATERS unit from your army disembarks from a TRANSPORT, until the end of the turn, add 1 to Charge rolls made for that unit and that unit's melee weapons have the [LANCE] ability.",
+    },
+    {
+      name: "Possessed Slaughterband", dpCost: 2, forceDisposition: "Purge the Foe",
+      rule: "Brazen Fury: WORLD EATERS POSSESSED units have the following ability — Brazen Fury: In your opponent's Shooting phase, when an enemy unit has shot, if a model in this unit was destroyed as a result of those attacks, this unit can make a surge move of up to D6\". That surge move is a Brazen Fury move.",
+    },
+    // ── 1 DP Detachments ──
+    {
+      name: "Brazen Engines", dpCost: 1, forceDisposition: "Disruption",
+      rule: "Rampaging Terrors: Friendly DAEMON VEHICLE units have the following ability — Terror of Khorne: At the start of the Fight phase, you can select one enemy unit engaged with this unit. That enemy unit makes a Battle-shock roll with -1 to that roll. Cannot select the same enemy unit more than once per phase. This detachment has the Onslaught tag and cannot be taken with another Onslaught detachment.",
+    },
+    {
+      name: "Butchers of Khorne", dpCost: 1, forceDisposition: "Take and Hold",
+      rule: "Adamantine Avalanche: At the start of the Fight phase, if a friendly TERMINATOR SQUAD unit is engaged, make a Blessings of Khorne roll and use the results to activate one Blessing of Khorne. Until the end of the phase, that Blessing of Khorne is active for friendly TERMINATOR SQUAD units in addition to any other Blessings of Khorne currently active.",
+    },
+    {
+      name: "Vessels of Wrath", dpCost: 1, forceDisposition: "Priority Assets",
+      rule: "Wrath of Khorne: When a friendly WORLD EATERS CHARACTER unit (excluding EPIC HERO units) is selected to fight, that unit's CHARACTER models' melee attacks can have either [CLEAVE 1] or +1 AP (your choice each time).",
+    },
   ],
   enhancements: [
-    { id: "we-e1", detachment: "Berzerker Warband", name: "Helm of Brazen Ire", points: 20, description: "Bearer has a 4+ invulnerable save. Each time selected to fight, can fight twice (must target different units on second fight)." },
-    { id: "we-e2", detachment: "Berzerker Warband", name: "Berzerker Glaive", points: 15, description: "Bearer's melee weapons have Devastating Wounds. Add 1 to bearer's Attacks." },
-    { id: "we-e3", detachment: "Cult of Blood", name: "Favoured of Khorne", points: 25, description: "Once per battle, at the start of the Fight phase, add 3 to the Attacks of all bearer's melee weapons until end of phase." },
-    { id: "we-e4", detachment: "Cult of Blood", name: "Blood-forged Armour", points: 20, description: "Reduce all damage dealt to bearer by 1 (min 1). Bearer ignores penalty for moving and shooting Heavy weapons." },
-    { id: "we-e5", detachment: "Goretrack Onslaught", name: "Skull Helm of Khorne", points: 30, description: "Enemy units within 6\" subtract 2 from their Leadership. Enemy units that fail Battle-shock tests within 6\" suffer D3 mortal wounds." },
+    // ── Berzerker Warband ──
+    { id: "we-e-bw1", detachment: "Berzerker Warband", name: "Battle-lust", points: 20, description: "WORLD EATERS model only. You can re-roll Charge rolls made for the bearer's unit. In addition, while the Unbridled Bloodlust Blessing of Khorne is active for your army, add 1 to Charge rolls made for the bearer's unit." },
+    { id: "we-e-bw2", detachment: "Berzerker Warband", name: "Berzerker Glaive", points: 35, description: "WORLD EATERS model only. Add 1 to the Attacks and Damage characteristics of melee weapons (excluding Extra Attacks weapons) equipped by the bearer." },
+    { id: "we-e-bw3", detachment: "Berzerker Warband", name: "Favoured of Khorne", points: 20, description: "WORLD EATERS model only. Each time you make a Blessings of Khorne roll, if the bearer is on the battlefield, you can re-roll up to two of the D6 rolled." },
+    { id: "we-e-bw4", detachment: "Berzerker Warband", name: "Helm of Brazen Ire", points: 30, description: "WORLD EATERS model only. Each time an attack is allocated to the bearer, subtract 1 from the Damage characteristic of that attack." },
+    // ── Cult of Blood ──
+    { id: "we-e-cob1", detachment: "Cult of Blood", name: "Brazen Form", points: 25, description: "WORLD EATERS MONSTER model only. +1 Toughness and Feel No Pain 5+." },
+    { id: "we-e-cob2", detachment: "Cult of Blood", name: "Butcher Lord", points: 10, description: "WORLD EATERS INFANTRY model only. The bearer has the Infiltrators ability." },
+    { id: "we-e-cob3", detachment: "Cult of Blood", name: "Chosen of the Blood God", points: 15, description: "WORLD EATERS MONSTER model only. Add 3\" to the range of the bearer's Aura abilities." },
+    { id: "we-e-cob4", detachment: "Cult of Blood", name: "Strategic Slaughter", points: 20, description: "WORLD EATERS model only. After deployment, redeploy up to three JAKHALS and/or GOREMONGERS units from your army. When doing so, you can set those units up in Strategic Reserves, regardless of how many units are already in Strategic Reserves." },
+    // ── Goretrack Onslaught ──
+    { id: "we-e-go1", detachment: "Goretrack Onslaught", name: "Aggressive Deployment", points: 20, description: "WORLD EATERS model only. In the Declare Battle Formations step, if the bearer starts the battle embarked within a DEDICATED TRANSPORT, that DEDICATED TRANSPORT has the Scouts 9\" ability." },
+    { id: "we-e-go2", detachment: "Goretrack Onslaught", name: "Infernal Infusion", points: 25, description: "WORLD EATERS model only. Once per battle, at the start of the Fight phase, the bearer can use this Enhancement. If it does, until the end of the phase, the bearer's unit has the Fights First ability." },
+    { id: "we-e-go3", detachment: "Goretrack Onslaught", name: "Murderous Onslaught", points: 5, description: "WORLD EATERS model only. If the bearer's unit disembarked from a TRANSPORT this turn, until the end of the turn, enemy units cannot use the Fire Overwatch Stratagem to shoot at the bearer's unit." },
+    { id: "we-e-go4", detachment: "Goretrack Onslaught", name: "Unleash Hell", points: 10, description: "WORLD EATERS model only. At the start of your Shooting phase, you can select one VEHICLE model within 6\" of the bearer or, if the bearer is embarked within a TRANSPORT, that TRANSPORT model. Until the end of the phase, after the selected model has shot, select one enemy unit hit by one or more of those attacks. Until the start of your next turn, that enemy unit is suppressed (each time a model in that unit makes an attack, subtract 1 from the Hit roll)." },
+    // ── Possessed Slaughterband ──
+    { id: "we-e-ps1", detachment: "Possessed Slaughterband", name: "Frenzied Focus", points: 20, description: "WORLD EATERS DAEMON model only. Each time a model in the bearer's unit makes an attack, a Critical Hit is scored on an unmodified Hit roll of 5+ instead of only a 6." },
+    { id: "we-e-ps2", detachment: "Possessed Slaughterband", name: "Killing Clarity", points: 15, description: "WORLD EATERS DAEMON model only. Each time the bearer's unit destroys an enemy unit, roll one D6: on a 4+, gain 1 CP." },
+    { id: "we-e-ps3", detachment: "Possessed Slaughterband", name: "Malicious Vigour", points: 30, description: "SLAUGHTERBOUND model only. Each time the bearer's unit makes a Brazen Fury move, it is treated as having rolled a 6 for the distance." },
+    { id: "we-e-ps4", detachment: "Possessed Slaughterband", name: "Violent Demise", points: 10, description: "WORLD EATERS DAEMON model only. The bearer's Deadly Demise ability inflicts mortal wounds on a D6 roll of 2+ instead of 6. The bearer also has Deadly Demise D3+1 instead of Deadly Demise D3." },
+    // ── Brazen Engines ──
+    { id: "we-e-be1", detachment: "Brazen Engines", name: "Murder-forged Entity", points: 15, description: "WORLD EATERS VEHICLE unit only. This unit has the DAEMON keyword." },
+    { id: "we-e-be2", detachment: "Brazen Engines", name: "Talons of Butchery", points: 20, description: "MAULERFIEND unit only. This unit's Maulerfiend Fists have [CLEAVE 2]." },
+    // ── Butchers of Khorne ──
+    { id: "we-e-bok1", detachment: "Butchers of Khorne", name: "Gore-stained Veterans", points: 20, description: "TERMINATOR SQUAD unit only. This unit's melee attacks have +1 WS." },
+    { id: "we-e-bok2", detachment: "Butchers of Khorne", name: "Sanctified in Slaughter", points: 15, description: "TERMINATOR SQUAD unit only. This unit has +1 OC." },
+    // ── Vessels of Wrath ──
+    { id: "we-e-vow1", detachment: "Vessels of Wrath", name: "Archslaughterer", points: 30, description: "WORLD EATERS model only. Once per battle per army, in your Command phase, you can use this ability. If you do, every Blessing of Khorne is active for this unit until the start of your next turn." },
+    { id: "we-e-vow2", detachment: "Vessels of Wrath", name: "Gateways to Glory", points: 10, description: "WORLD EATERS DAEMON PRINCE model only. This model has MOBILE and +1 to Charge rolls." },
   ],
   stratagems: [
-    { id: "we-s1", detachment: "Berzerker Warband", name: "Skulls for the Skull Throne!", cost: "1 CP", phase: "Fight Phase", description: "Use when a WE unit is chosen to fight. Each unmodified Hit roll of 6 scores 1 additional hit." },
-    { id: "we-s2", detachment: "Berzerker Warband", name: "Frenzied Resilience", cost: "2 CP", phase: "Any Phase", description: "When a WE INFANTRY unit would lose wounds, until end of phase models have a 5+ Feel No Pain." },
-    { id: "we-s3", detachment: "Cult of Blood", name: "Hack and Slash", cost: "1 CP", phase: "Fight Phase", description: "Each time a model destroys an enemy model, it can immediately make 1 additional attack with the same weapon." },
-    { id: "we-s4", detachment: "Cult of Blood", name: "Blood Offering", cost: "1 CP", phase: "Command Phase", description: "Select one friendly WE unit that has destroyed at least one enemy model. It regains D3 lost wounds and ignores Battle-shock until your next Command phase." },
-    { id: "we-s5", detachment: "Goretrack Onslaught", name: "Daemontide", cost: "1 CP", phase: "Movement Phase", description: "Select one WE DAEMON unit. That unit can immediately make a Normal move of up to 6\"." },
-    { id: "we-s6", detachment: "Goretrack Onslaught", name: "A Worthy Skull", cost: "1 CP", phase: "Fight Phase", description: "Add 2 to the Attacks of melee weapons equipped by a WE CHARACTER this phase." },
+    // ── Berzerker Warband ──
+    { id: "we-s-bw1", detachment: "Berzerker Warband", name: "Blood Offering", cost: "1 CP", phase: "Any Phase (Epic Deed)", description: "WHEN: Any phase. TARGET: One WORLD EATERS unit from your army that was just destroyed while it was within range of one or more objective markers you controlled at the end of the previous phase. You can use this Stratagem on that unit even though it was just destroyed. EFFECT: Select one of those objective markers. That objective marker remains under your control until your opponent's Level of Control over that objective marker is greater than yours at the end of a phase." },
+    { id: "we-s-bw2", detachment: "Berzerker Warband", name: "Hack and Slash", cost: "1 CP", phase: "Fight Phase (Battle Tactic)", description: "WHEN: Fight phase. TARGET: One WORLD EATERS unit from your army that has not been selected to fight this phase and that made a charge move this turn. EFFECT: Until the end of the phase, improve the Armour Penetration characteristic of melee weapons equipped by models in your unit by 1." },
+    { id: "we-s-bw3", detachment: "Berzerker Warband", name: "Frenzied Resilience", cost: "2 CP", phase: "Fight Phase (Battle Tactic)", description: "WHEN: Fight phase, just after an enemy unit has selected its targets. TARGET: One WORLD EATERS unit from your army that was selected as the target of one or more of the attacking unit's attacks. EFFECT: Until the end of the phase, each time an attack is allocated to a model in your unit, subtract 1 from the Damage characteristic of that attack." },
+    { id: "we-s-bw4", detachment: "Berzerker Warband", name: "Skulls for the Skull Throne!", cost: "1 CP", phase: "Fight Phase (Strategic Ploy)", description: "WHEN: Fight phase, just after a WORLD EATERS unit from your army destroys a CHARACTER or MONSTER model. TARGET: That WORLD EATERS unit. EFFECT: Make a Blessings of Khorne roll and use the results to activate one Blessing of Khorne. Until the end of the battle round, that Blessing of Khorne is active in addition to any other Blessings of Khorne that are currently active." },
+    { id: "we-s-bw5", detachment: "Berzerker Warband", name: "Apoplectic Frenzy", cost: "1 CP", phase: "Movement Phase (Strategic Ploy)", description: "WHEN: Your Movement phase, just after a KHORNE BERZERKERS unit from your army is selected to Advance. TARGET: That KHORNE BERZERKERS unit. EFFECT: Until the end of the turn, your unit is eligible to declare a charge in a turn in which it Advanced." },
+    { id: "we-s-bw6", detachment: "Berzerker Warband", name: "Berzerker's Wrath", cost: "1 CP", phase: "Shooting Phase (Strategic Ploy)", description: "WHEN: Your opponent's Shooting phase, just after an enemy unit has shot. TARGET: One KHORNE BERZERKERS unit from your army that can make a surge move as a result of those attacks. EFFECT: Do not roll a D6 to determine how far models in your unit can move when they make a surge move. Instead, when making a surge move, those models can move up to 8\"." },
+    // ── Cult of Blood ──
+    { id: "we-s-cob1", detachment: "Cult of Blood", name: "Bloody Vengeance", cost: "1 CP", phase: "Any Phase (Epic Deed)", description: "WHEN: Any phase, just after a WORLD EATERS MONSTER or TITANIC unit from your army is destroyed by an enemy unit. TARGET: That destroyed unit. EFFECT: Until the end of the battle, each time a JAKHALS or GOREMONGERS unit from your army makes an attack that targets the unit that destroyed your unit, you can re-roll the Hit roll." },
+    { id: "we-s-cob2", detachment: "Cult of Blood", name: "Drawn to the Slaughter", cost: "2 CP", phase: "Any Phase (Strategic Ploy)", description: "WHEN: Any phase, just after a JAKHALS unit from your army is destroyed. TARGET: That destroyed JAKHALS unit. EFFECT: Add a new unit of JAKHALS identical to the destroyed unit to your army in Strategic Reserves at Starting Strength. CHARACTER units that were attached to the destroyed unit cannot be returned in this way." },
+    { id: "we-s-cob3", detachment: "Cult of Blood", name: "In the Shadow of Brass Idols", cost: "1 CP", phase: "Shooting or Fight Phase (Strategic Ploy)", description: "WHEN: Your opponent's Shooting phase or the Fight phase, just after an enemy unit has selected its targets. TARGET: One JAKHALS or GOREMONGERS unit from your army that was selected as the target. EFFECT: Until the attacker has finished making its attacks, models in your unit have Feel No Pain 6+. If your unit is within 6\" of a WORLD EATERS MONSTER (or within 9\" of a WORLD EATERS TITANIC unit), they have Feel No Pain 5+ instead." },
+    { id: "we-s-cob4", detachment: "Cult of Blood", name: "Bloodthirsty Horde", cost: "1 CP", phase: "Fight Phase (Battle Tactic)", description: "WHEN: Fight phase. TARGET: One JAKHALS or GOREMONGERS unit from your army within Engagement Range of one or more enemy units. EFFECT: Until the end of the phase, when determining which models in your unit are eligible to fight, any model within 3\" of any enemy model is eligible, and models in your unit can target enemy units within 3\" of them that are within Engagement Range of their unit." },
+    { id: "we-s-cob5", detachment: "Cult of Blood", name: "Fail Not The Blood God", cost: "1 CP", phase: "Fight Phase (Battle Tactic)", description: "WHEN: Fight phase. TARGET: One JAKHALS or GOREMONGERS unit from your army that has not been selected to fight this phase. EFFECT: Until the end of the phase, you can re-roll Hit rolls of 1 for attacks made by models in your unit. If your unit is within 6\" of a WORLD EATERS MONSTER (or within 9\" of a WORLD EATERS TITANIC unit), you can re-roll all Hit rolls instead." },
+    { id: "we-s-cob6", detachment: "Cult of Blood", name: "Brazen Idol", cost: "1 CP", phase: "Command Phase (Epic Deed, once per battle)", description: "WHEN: Your Command phase. TARGET: One WORLD EATERS MONSTER or TITANIC unit from your army. EFFECT: Select the Idol of Infinite Rage, Idol of Burning Wrath or Idol of Blessed Blood ability. Until the start of your next Command phase, that Idol of Khorne ability is active for your unit instead of any other Idol of Khorne ability that is active for your army, even if you have already selected that Idol of Khorne ability this battle." },
+    // ── Goretrack Onslaught ──
+    { id: "we-s-go1", detachment: "Goretrack Onslaught", name: "Endless Pursuit of Violence", cost: "1 CP", phase: "Fight Phase (Strategic Ploy)", description: "WHEN: End of the Fight phase. TARGET: One WORLD EATERS INFANTRY unit from your army and one friendly TRANSPORT that it is able to embark within. EFFECT: If your WORLD EATERS INFANTRY unit is wholly within 6\" of that TRANSPORT, it can embark within it." },
+    { id: "we-s-go2", detachment: "Goretrack Onslaught", name: "Smash Through", cost: "1 CP", phase: "Movement Phase (Strategic Ploy)", description: "WHEN: Your Movement phase. TARGET: One WORLD EATERS VEHICLE model from your army that has not been selected to move this phase. EFFECT: Until the end of the phase, each time your unit makes a Normal or Advance move, it can move horizontally through terrain features." },
+    { id: "we-s-go3", detachment: "Goretrack Onslaught", name: "Aggressive Disembarkation", cost: "1 CP", phase: "Movement Phase (Strategic Ploy)", description: "WHEN: Your Movement phase. TARGET: One WORLD EATERS RHINO model from your army that has not been selected to move this phase. EFFECT: One WORLD EATERS unit embarked within your RHINO can disembark. When doing so, models in that unit can be set up anywhere on the battlefield wholly within 6\" of your RHINO and can be set up within Engagement Range of one or more enemy units." },
+    { id: "we-s-go4", detachment: "Goretrack Onslaught", name: "Full-Throttle Assault", cost: "1 CP", phase: "Movement Phase (Strategic Ploy)", description: "WHEN: Your Movement phase. TARGET: One WORLD EATERS RHINO model from your army that has not been selected to move this phase. EFFECT: Until the end of the phase, each time a WORLD EATERS unit disembarks from that model after it has made a Normal move, that unit is still eligible to declare a charge this turn." },
+    { id: "we-s-go5", detachment: "Goretrack Onslaught", name: "Unrelenting Advance", cost: "1 CP", phase: "Shooting Phase (Strategic Ploy)", description: "WHEN: Your opponent's Shooting phase, just after an enemy unit has shot. TARGET: One WORLD EATERS VEHICLE model from your army that was hit by one or more of the attacking unit's attacks. EFFECT: Your model can make a Normal move of up to 6\". Restriction: Cannot be targeted with this and the Fury Unleashed Stratagem in the same phase." },
+    { id: "we-s-go6", detachment: "Goretrack Onslaught", name: "Fury Unleashed", cost: "1 CP", phase: "Shooting Phase (Strategic Ploy)", description: "WHEN: Your opponent's Shooting phase, just after an enemy unit has shot. TARGET: One WORLD EATERS RHINO model from your army that has one or more wounds remaining and was hit by one or more of the attacking unit's attacks. EFFECT: One KHORNE BERZERKERS unit embarked within your model can make a disembark move and then make a surge move of up to D6+2\". Restriction: Cannot be targeted with this and the Unrelenting Advance Stratagem in the same phase." },
+    // ── Possessed Slaughterband ──
+    { id: "we-s-ps1", detachment: "Possessed Slaughterband", name: "Daemonic Resistance", cost: "2 CP", phase: "Shooting or Fight Phase (Battle Tactic)", description: "WHEN: Your opponent's Shooting phase or the Fight phase, just after an enemy unit has selected its targets. TARGET: One WORLD EATERS POSSESSED unit from your army that was selected as the target. EFFECT: Until the attacker has finished making its attacks, subtract 1 from the Wound rolls of attacks that target your unit." },
+    { id: "we-s-ps2", detachment: "Possessed Slaughterband", name: "Daemonic Strength", cost: "1 CP", phase: "Fight Phase (Battle Tactic)", description: "WHEN: Fight phase. TARGET: One WORLD EATERS POSSESSED unit from your army that has not been selected to fight this phase. EFFECT: Until the end of the phase, if your unit has the EIGHTBOUND keyword and the target unit is not a MONSTER or VEHICLE, +1 Damage per attack. If your unit has the EXALTED EIGHTBOUND keyword and the target IS a MONSTER or VEHICLE, +1 Damage instead." },
+    { id: "we-s-ps3", detachment: "Possessed Slaughterband", name: "Immortal Fury", cost: "2 CP", phase: "Fight Phase (Battle Tactic)", description: "WHEN: Fight phase, just after an enemy unit has selected its targets. TARGET: One WORLD EATERS POSSESSED unit from your army that was selected as the target. EFFECT: Until the end of the phase, each time a model in your unit is destroyed, if that model has not fought this phase, do not remove it from play. The destroyed model can fight after the attacking unit has finished making its attacks, and is then removed from play." },
+    { id: "we-s-ps4", detachment: "Possessed Slaughterband", name: "Rapid Manifestation", cost: "1 CP", phase: "Movement Phase (Strategic Ploy)", description: "WHEN: Your Movement phase, when an EXALTED EIGHTBOUND unit from your army arrives via Deep Strike. TARGET: That EXALTED EIGHTBOUND unit. EFFECT: Your unit can be set up anywhere on the battlefield that is more than 6\" from all enemy units. Until the end of the turn, your unit is not eligible to declare a charge." },
+    { id: "we-s-ps5", detachment: "Possessed Slaughterband", name: "Warp Stalkers", cost: "1 CP", phase: "Movement or Charge Phase (Strategic Ploy)", description: "WHEN: Your Movement phase or Charge phase. TARGET: One WORLD EATERS POSSESSED unit from your army that has not yet been selected to move or charge this phase. EFFECT: Until the end of the phase, models in your unit can move through other models (excluding MONSTERS and VEHICLES) and can move within Engagement Range of such models, but cannot end that move within Engagement Range of them unless it was a Charge move. Desperate Escape tests made as a result of this move are automatically passed." },
+    { id: "we-s-ps6", detachment: "Possessed Slaughterband", name: "Horrifying Violence", cost: "1 CP", phase: "Command Phase (Strategic Ploy)", description: "WHEN: Your opponent's Command phase. TARGET: One WORLD EATERS POSSESSED unit from your army within Engagement Range of one or more enemy units. EFFECT: Each enemy unit within Engagement Range of your unit must take a Battle-shock test, subtracting 1 from that test." },
+    // ── Brazen Engines ──
+    { id: "we-s-be1", detachment: "Brazen Engines", name: "Apoplectic Clarity", cost: "1 CP", phase: "Shooting or Fight Phase", description: "WHEN: Your Shooting phase or the Fight phase, when a friendly DAEMON VEHICLE unit is selected to attack. TARGET: That DAEMON VEHICLE unit. EFFECT: Your unit's attacks can ignore modifiers to BS, WS, Hit rolls and Wound rolls." },
+    { id: "we-s-be2", detachment: "Brazen Engines", name: "Goaded to Fury", cost: "1 CP", phase: "Shooting Phase", description: "WHEN: Your opponent's Shooting phase, when an enemy unit that targeted a friendly unengaged DAEMON VEHICLE unit (excluding Titanic units) has shot. TARGET: That DAEMON VEHICLE unit. EFFECT: Your unit can make a surge move of up to D6\"." },
+    { id: "we-s-be3", detachment: "Brazen Engines", name: "Trail of Destruction", cost: "1 CP", phase: "Movement Phase", description: "WHEN: Your Movement phase, when a friendly DAEMON VEHICLE unit is selected to move. TARGET: That DAEMON VEHICLE unit. EFFECT: Until the end of the phase, your unit has the MOBILE ability." },
+    // ── Butchers of Khorne ──
+    { id: "we-s-bok1", detachment: "Butchers of Khorne", name: "Wrath Beyond Reason", cost: "2 CP", phase: "Shooting Phase", description: "WHEN: Your opponent's Shooting phase, when an enemy unit targets a friendly TERMINATOR SQUAD unit. TARGET: That TERMINATOR SQUAD unit. EFFECT: Until that enemy unit has finished attacking, ranged attacks that target your unit have -1 Damage." },
+    { id: "we-s-bok2", detachment: "Butchers of Khorne", name: "Focused Ferocity", cost: "1 CP", phase: "Fight Phase", description: "WHEN: Fight phase, when a friendly TERMINATOR SQUAD unit is selected to fight. TARGET: That TERMINATOR SQUAD unit. EFFECT: Your unit's melee attacks have +1 Attacks until end of phase." },
+    { id: "we-s-bok3", detachment: "Butchers of Khorne", name: "A Trophy for the Throne", cost: "1 CP", phase: "Fight Phase", description: "WHEN: Fight phase, when a friendly TERMINATOR SQUAD unit is selected to fight. TARGET: That TERMINATOR SQUAD unit. EFFECT: Your unit's attacks that target a MONSTER or VEHICLE unit have +1 to Wound rolls until end of phase." },
+    // ── Vessels of Wrath ──
+    { id: "we-s-vow1", detachment: "Vessels of Wrath", name: "Scorn the Witch", cost: "1 CP", phase: "Any Phase", description: "WHEN: Any phase, when a friendly WORLD EATERS CHARACTER unit (excluding EPIC HERO units) suffers a mortal wound. TARGET: That WORLD EATERS CHARACTER unit. EFFECT: Your unit has Feel No Pain 4+ against mortal wounds until end of phase." },
+    { id: "we-s-vow2", detachment: "Vessels of Wrath", name: "Punish the Craven", cost: "1 CP", phase: "Movement Phase", description: "WHEN: Your opponent's Movement phase, when a unit is selected to make a Fall Back move, if that unit is engaged with a friendly WORLD EATERS CHARACTER unit (excluding EPIC HERO units). TARGET: That WORLD EATERS CHARACTER unit. EFFECT: When an enemy unit engaged with your unit is selected to make a Fall Back move, that enemy unit must use the Desperate Escape mode. If that enemy unit is Battle-shocked, subtract 1 from those hazard rolls." },
+    { id: "we-s-vow3", detachment: "Vessels of Wrath", name: "Aspire to Infamy", cost: "1 CP", phase: "Fight Phase", description: "WHEN: Fight phase, when a friendly WORLD EATERS CHARACTER unit (excluding EPIC HERO units) is selected to fight. TARGET: That WORLD EATERS CHARACTER unit. EFFECT: Until the end of the phase, your unit's CHARACTER models' melee attacks have +1 Attacks and +2 Strength." },
   ],
   marks: [],
   units: [
@@ -764,8 +908,20 @@ const WE_DATA = {
 // ============================================================
 // FACTION REGISTRY
 // ============================================================
-// Maps faction ID strings to their full data objects.
-// Add new factions here to make them available throughout the app.
+// Maps faction ID strings → full data objects.
+// This is the single source of truth for which factions exist.
+//
+// To add a new faction:
+//   1. Define a new data object (e.g. DRUKHARI_DATA = { id: "drk", ... })
+//   2. Add it here: { ..., drk: DRUKHARI_DATA }
+//   3. Add faction honours to BATTLE_HONOURS, agendas to CRUSADE_AGENDAS,
+//      and wire it into CrusadeUnitCard's availableHonourCategories.
+//
+// The faction ID string (e.g. "csm") is used:
+//   - As the key in this registry
+//   - In factionId state throughout ArmyBuilder and CrusadeSection
+//   - In factionRestriction fields on agendas and honour categories
+//   - As the CSS accent/color source via FACTIONS[factionId].color
 
 // ============================================================
 // GAME DATA — SPACE MARINES / ADEPTUS ASTARTES (10th Edition)
@@ -787,30 +943,217 @@ const SM_DATA = {
     description: "At the start of your Command phase, select one enemy unit on the battlefield. Until the start of your next Command phase, that unit is your Oath of Moment target. Each time an ADEPTUS ASTARTES model from your army makes an attack that targets your Oath of Moment unit, you can re-roll the Hit roll, and if your army is Battle-forged and includes only ADEPTUS ASTARTES units, you can also re-roll the Wound roll.",
   },
   detachments: [
-    { name: "Gladius Task Force", dpCost: 2, forceDisposition: "Take and Hold", rule: "Finest Hour: Each ADEPTUS ASTARTES BATTLELINE unit has the Objective Secured ability. Once per battle round, one unit can use Finest Hour — its ranged and melee attacks gain Lethal Hits until end of phase." },
-    { name: "Ironstorm Spearhead", dpCost: 2, forceDisposition: "Purge the Foe", rule: "Storm of Fire: At the start of your Shooting phase, select one ADEPTUS ASTARTES VEHICLE. Until end of phase, add 1 to Hit rolls for its ranged attacks. ADEPTUS ASTARTES VEHICLE models can shoot even while in Engagement Range." },
-    { name: "Vanguard Spearhead", dpCost: 2, forceDisposition: "Reconnaissance", rule: "Guerrilla Tactics: ADEPTUS ASTARTES PHOBOS units have the Stealth ability. Once per battle round, one PHOBOS unit can be removed from the battlefield at the end of the Fight phase and placed into Strategic Reserves." },
-    { name: "Anvil Siege Force", dpCost: 2, forceDisposition: "Take and Hold", rule: "Lay Down Suppressing Fire: Units that do not move gain the benefit of cover against ranged attacks. Heavy weapons gain +1 to Hit if the bearer did not move this turn." },
-    { name: "Stormlance Task Force", dpCost: 2, forceDisposition: "Disruption", rule: "Thunderstrike: Each time an ADEPTUS ASTARTES MOUNTED or BIKER unit makes a charge move, until the end of the turn, its melee weapons gain the Lance ability." },
-    { name: "1st Company Task Force", dpCost: 3, forceDisposition: "Priority Assets", rule: "Veteran Warriors: TERMINATOR, BLADEGUARD VETERAN SQUAD, STERNGUARD VETERAN SQUAD and VANGUARD VETERAN SQUAD units have Fights First when they make a charge move. They also gain +1 to Hit against your Oath of Moment target." },
+    // ── 3 DP Detachments ──
+    {
+      name: "Gladius Task Force", dpCost: 3, forceDisposition: "Priority Assets",
+      rule: "Combat Doctrines: At the start of your Command phase, you can select one Combat Doctrine (once each per battle). Until the start of your next Command phase, that doctrine is active for all ADEPTUS ASTARTES units: Devastator Doctrine — this unit is eligible to shoot in a turn in which it Advanced. Tactical Doctrine — this unit is eligible to shoot and declare a charge in a turn in which it Fell Back. Assault Doctrine — this unit is eligible to declare a charge in a turn in which it Advanced.",
+    },
+    {
+      name: "Armoured Speartip", dpCost: 3, forceDisposition: "Purge the Foe",
+      rule: "Rapid Deployment: Each time an ADEPTUS ASTARTES unit disembarks from a Transport (excluding FLY) that made a Normal or Advance move this phase (excluding those that arrived from Strategic Reserves), that disembarked unit can make a Normal move of up to D6\", or D3+3\" if that Transport is a Heavy Transport. Heavy Transport = ADEPTUS ASTARTES TRANSPORT units (excl. FLY) with 14+ Wounds characteristic.",
+    },
+    {
+      name: "Blade of Ultramar", dpCost: 3, forceDisposition: "Take and Hold",
+      rule: "Mastered Doctrines (ULTRAMARINES only — cannot include other Chapter units): At the start of up to three of your Command phases, select one Combat Doctrine: Devastator Doctrine (unit eligible to shoot in a turn it Advanced), Tactical Doctrine (unit eligible to shoot and declare a charge in a turn it Fell Back), or Assault Doctrine (unit eligible to declare a charge in a turn it Advanced). Cannot select a Doctrine already chosen this battle unless Marneus Calgar is on the battlefield.",
+    },
+    {
+      name: "Ceramite Sentinels", dpCost: 3, forceDisposition: "Take and Hold",
+      rule: "Adaptive Defence: Each time an ADEPTUS ASTARTES model makes an attack, if that model's unit is in a terrain feature, re-roll a Hit roll of 1 and re-roll a Wound roll of 1. ADEPTUS ASTARTES units gain the ENTRENCHED keyword while: within a terrain feature, not set up on the battlefield this turn, and no model in the unit has moved more than 3\" this turn.",
+    },
+    // ── 2 DP Detachments ──
+    {
+      name: "1st Company Task Force", dpCost: 2, forceDisposition: "Purge the Foe",
+      rule: "Extremis-level Threat: Once per battle, in your Command phase, you can use this ability. If you do, until the start of your next Command phase, each time a model from your army with the Oath of Moment ability makes an attack that targets your Oath of Moment target, you can re-roll the Wound roll as well.",
+    },
+    {
+      name: "Vanguard Spearhead", dpCost: 2, forceDisposition: "Reconnaissance",
+      rule: "Shadow Masters: Each time a ranged attack targets an ADEPTUS ASTARTES unit from your army, unless the attacking model is within 12\", the target has the Benefit of Cover against that attack.",
+    },
+    {
+      name: "Anvil Siege Force", dpCost: 2, forceDisposition: "Take and Hold",
+      rule: "Shield of the Imperium: Ranged weapons equipped by ADEPTUS ASTARTES models from your army have the [HEAVY] ability. If such a weapon already has this ability, each time an attack is made with that weapon, if the attacking model's unit Remained Stationary this turn, add 1 to the Wound roll.",
+    },
+    {
+      name: "Bastion Task Force", dpCost: 2, forceDisposition: "Take and Hold",
+      rule: "Interlocking Tactics: ADEPTUS ASTARTES BATTLELINE units from your army are eligible to shoot and declare a charge in a turn in which they Advanced or Fell Back, and are eligible to start to perform an Action in a turn in which they Advanced or Fell Back. Each time an ADEPTUS ASTARTES BATTLELINE unit is selected to attack, after resolving those attacks, select one enemy unit hit by one or more of those attacks — until the end of the turn, that enemy unit is auspex scanned. Each time an ADEPTUS ASTARTES model makes an attack that targets an auspex scanned unit, re-roll a Hit roll of 1.",
+    },
+    {
+      name: "Headhunter Task Force", dpCost: 2, forceDisposition: "Purge the Foe",
+      rule: "Target Sighted: TANK ACE units (ADEPTUS ASTARTES VEHICLE units excl. Fortifications, Drop Pods, Walkers, and FLY) that Advance do not make an Advance roll — instead add 6\" to their Move characteristic until end of phase. Each time a TANK ACE unit shoots in the Shooting phase, if that unit did not Advance this turn, you can re-roll the Damage roll. In the Muster Armies step, select up to three TANK ACE units to gain the CHARACTER keyword.",
+    },
+    {
+      name: "Reclamation Force", dpCost: 2, forceDisposition: "Take and Hold",
+      rule: "Oath of Reclamation (ULTRAMARINES only — cannot include other Chapter units): Each time an ADEPTUS ASTARTES model makes a melee attack that targets a unit within range of an objective marker, improve the AP of that attack by 1. Each time an attack targets an ADEPTUS ASTARTES unit within range of an objective marker you controlled at the start of the phase, if the Strength of that attack is greater than the Toughness of your unit or your unit has the TITUS keyword, subtract 1 from the Wound roll.",
+    },
+    // ── 1 DP Detachments ──
+    {
+      name: "Fulguris Task Force", dpCost: 1, forceDisposition: "Disruption",
+      rule: "Skystrike: Friendly LAND SPEEDER, STORM SPEEDER HAILSTRIKE, STORM SPEEDER HAMMERSTRIKE, and STORM SPEEDER THUNDERSTRIKE units have the SPEEDER keyword. In your first Movement phase, friendly SPEEDER units can make an ingress move.",
+    },
+    {
+      name: "Librarius Conclave", dpCost: 1, forceDisposition: "Priority Assets",
+      rule: "Psychic Disciplines: At the start of each battle round, select one of the following Psychic Disciplines — friendly ADEPTUS ASTARTES PSYKER units have that ability until end of battle round: Biomancy Discipline (+2\" M), Divination Discipline (re-roll Hit rolls of 1 and Wound rolls of 1), Pyromancy Discipline (ranged attacks targeting enemy units within 12\" have +1 AP), Telekinesis Discipline (ranged attacks targeting this unit have -1 S), Telepathy Discipline (this unit's attacks can ignore modifiers to BS, WS and hit rolls).",
+    },
+    {
+      name: "Subversive Assets", dpCost: 1, forceDisposition: "Reconnaissance",
+      rule: "Nowhere to Hide: Friendly PHOBOS/SCOUT SQUAD units have Transhuman Perception — in your Shooting phase, this unit can select one visible enemy unit within 12\": that enemy unit is detected (detected units have +3\" detection range). While a unit is detected, that unit has +3\" detection range.",
+    },
+    {
+      name: "Vengeful Hosts", dpCost: 1, forceDisposition: "Disruption",
+      rule: "Imperator Unleashed: In a turn a friendly ADEPTUS ASTARTES FLY INFANTRY unit made an ingress or charge move, that unit's attacks can re-roll Hit rolls of 1.",
+    },
   ],
   enhancements: [
-    { id: "sm-e1", detachment: "Gladius Task Force", name: "Adept of the Codex", points: 15, description: "Once per battle round, reduce the CP cost of a Stratagem targeting a unit within 6\" of the bearer by 1." },
-    { id: "sm-e2", detachment: "Gladius Task Force", name: "Artificer Armour", points: 10, description: "Improve the bearer's Save by 1 (e.g. 3+ becomes 2+). Bearer also gains a 4+ invulnerable save." },
-    { id: "sm-e3", detachment: "1st Company Task Force", name: "Rites of War", points: 25, description: "Once per battle round, one friendly ADEPTUS ASTARTES unit within 6\" can use a Stratagem for 0 CP." },
-    { id: "sm-e4", detachment: "Anvil Siege Force", name: "The Honour Vehement", points: 20, description: "Add 1 to the Attacks and Strength of the bearer's melee weapons. The bearer also has the Fights First ability." },
-    { id: "sm-e5", detachment: "Stormlance Task Force", name: "Sanctic Halo", points: 15, description: "Bearer has a 4+ invulnerable save. Each time the bearer would lose a wound, roll 1D6: on a 5+, that wound is not lost." },
-    { id: "sm-e6", detachment: "Ironstorm Spearhead", name: "Forged in Battle", points: 10, description: "Each time the bearer makes an attack, re-roll unmodified Hit rolls of 1. If this unit charged this turn, re-roll all Hit rolls instead." },
+    // ── Armoured Speartip ──
+    { id: "sm-e-as1", detachment: "Armoured Speartip", name: "Liberator", points: 15, description: "ADEPTUS ASTARTES model only. If you control an objective marker at the end of your Command phase, and the bearer's unit (or any HEAVY TRANSPORT it is embarked within) is within range of that objective marker, that objective marker remains under your control until your opponent's Level of Control over that objective marker is greater than yours at the end of a phase." },
+    { id: "sm-e-as2", detachment: "Armoured Speartip", name: "Tip of the Spear", points: 15, description: "ADEPTUS ASTARTES model only. If the bearer starts the battle embarked within a TRANSPORT, that TRANSPORT has the Scouts 6\" ability." },
+    { id: "sm-e-as3", detachment: "Armoured Speartip", name: "Shock Deployment", points: 20, description: "ADEPTUS ASTARTES TERMINATOR or GRAVIS model only. In your Shooting phase, each time the bearer's unit is selected to shoot, if it disembarked from a TRANSPORT this turn, until the end of the phase, ranged weapons equipped by models in that unit have the [SUSTAINED HITS 1] ability." },
+    { id: "sm-e-as4", detachment: "Armoured Speartip", name: "Armoured Commander", points: 25, description: "ADEPTUS ASTARTES model only. Once per turn, in your Movement phase, the bearer can use this Enhancement. If it does, select one friendly ADEPTUS ASTARTES TRANSPORT in Strategic Reserves. Until the end of the phase, for the purposes of setting up that TRANSPORT on the battlefield, treat the current battle round number as being one higher than it actually is." },
+    // ── Bastion Task Force ──
+    { id: "sm-e-btf1", detachment: "Bastion Task Force", name: "Eye of the Primarch", points: 15, description: "ADEPTUS ASTARTES model only. Ranged weapons equipped by the bearer and BATTLELINE models in the bearer's unit have the [PRECISION] ability." },
+    { id: "sm-e-btf2", detachment: "Bastion Task Force", name: "Hero of the Chapter", points: 20, description: "ADEPTUS ASTARTES model only. While the bearer is leading a unit, the bearer has the BATTLELINE keyword." },
+    { id: "sm-e-btf3", detachment: "Bastion Task Force", name: "Blades of Valour", points: 15, description: "ADEPTUS ASTARTES model only. Improve the Armour Penetration characteristic of melee weapons equipped by the bearer and BATTLELINE models in the bearer's unit by 1." },
+    { id: "sm-e-btf4", detachment: "Bastion Task Force", name: "Bombast Omnivox", points: 20, description: "ADEPTUS ASTARTES model only. Each time you select the bearer's unit as the target of a Stratagem, roll one D6, adding 1 if the bearer's unit has the BATTLELINE keyword: on a 4+, you gain 1 CP." },
+    // ── Blade of Ultramar ──
+    { id: "sm-e-bou1", detachment: "Blade of Ultramar", name: "Armour of Antoninus", points: 15, description: "ADEPTUS ASTARTES model only. The bearer has a Save characteristic of 2+ and the Feel No Pain 5+ ability." },
+    { id: "sm-e-bou2", detachment: "Blade of Ultramar", name: "Oath of Macragge", points: 20, description: "ADEPTUS ASTARTES model only. Add 1 to the Attacks and Strength characteristics of the bearer's melee weapons. While the bearer is under the effects of the Assault Doctrine, add 2 to the Attacks and Strength characteristics of the bearer's melee weapons instead." },
+    { id: "sm-e-bou3", detachment: "Blade of Ultramar", name: "Student of the Codex", points: 15, description: "ADEPTUS ASTARTES model only. At the start of your Command phase, if the bearer is on the battlefield, it can use this Enhancement. Until the start of your next Command phase, the Tactical Doctrine is active for this unit instead of any other Combat Doctrine you select for your army, even if there is no Combat Doctrine active for your army." },
+    { id: "sm-e-bou4", detachment: "Blade of Ultramar", name: "Veteran of Behemoth", points: 15, description: "ADEPTUS ASTARTES model only. While the bearer is leading a unit, ranged weapons equipped by models in that unit have the [SUSTAINED HITS 1] ability. In addition, while the bearer's unit is under the effects of the Devastator Doctrine, you can re-roll Advance rolls made for that unit." },
+    // ── Ceramite Sentinels ──
+    { id: "sm-e-cs1", detachment: "Ceramite Sentinels", name: "Honour Indefatigable", points: 20, description: "GRAVIS model only. The first time the bearer is destroyed, roll one D6 at the end of the phase. On a 4+, set the bearer back up on the battlefield as close as possible to where it was destroyed and not within Engagement Range of any enemy units, with its full wounds remaining." },
+    { id: "sm-e-cs2", detachment: "Ceramite Sentinels", name: "Castellum Omnivox", points: 15, description: "ADEPTUS ASTARTES model only. Each time the bearer's unit makes a Fall Back move, select one of the following to apply until the end of the turn: that unit is eligible to perform an Action in a turn in which it Fell Back; that unit is eligible to shoot and declare a charge in a turn in which it Fell Back; that unit is eligible to shoot and declare a charge in a turn in which it Fell Back." },
+    { id: "sm-e-cs3", detachment: "Ceramite Sentinels", name: "Spy-Skull Data Link", points: 15, description: "ADEPTUS ASTARTES model only. Ranged weapons equipped by models in the bearer's unit have the [IGNORES COVER] ability." },
+    { id: "sm-e-cs4", detachment: "Ceramite Sentinels", name: "Defensive Mastery", points: 20, description: "ADEPTUS ASTARTES model only. After both players have deployed their armies, select up to three ADEPTUS ASTARTES units from your army and redeploy them. When doing so, you can set those units up in Strategic Reserves, regardless of how many units are already in Strategic Reserves." },
+    // ── Fulguris Task Force ──
+    { id: "sm-e-ftf1", detachment: "Fulguris Task Force", name: "Bellicose Weapon Spirits", points: 15, description: "SPEEDER unit only. This unit can re-roll Damage rolls and rolls to determine the Attacks (A) characteristic of a weapon." },
+    { id: "sm-e-ftf2", detachment: "Fulguris Task Force", name: "Raptorial Cogitator Core", points: 20, description: "SPEEDER unit only. This unit's ranged attacks have [IGNORES COVER]." },
+    // ── Headhunter Task Force ──
+    { id: "sm-e-htf1", detachment: "Headhunter Task Force", name: "Redoubtable Machine Spirit", points: 20, description: "ADEPTUS ASTARTES VEHICLE model only. The bearer has a 5+ invulnerable save and, at the end of your Command phase, the bearer regains 1 lost wound." },
+    { id: "sm-e-htf2", detachment: "Headhunter Task Force", name: "Gunnery Honours", points: 15, description: "ADEPTUS ASTARTES VEHICLE model only. Once per phase, you can re-roll one Hit roll, one Wound roll and one Damage roll for the bearer." },
+    { id: "sm-e-htf3", detachment: "Headhunter Task Force", name: "Firestorm Coordinators", points: 15, description: "ADEPTUS ASTARTES VEHICLE model only. Ranged weapons equipped by the bearer have the [SUSTAINED HITS 1] ability." },
+    { id: "sm-e-htf4", detachment: "Headhunter Task Force", name: "Astartes Tank Ace (Aura)", points: 20, description: "ADEPTUS ASTARTES VEHICLE model only. In your Shooting phase, while a friendly ADEPTUS ASTARTES VEHICLE unit is within 6\" of the bearer, ranged weapons equipped by models in that unit have the [ASSAULT] ability." },
+    // ── Librarius Conclave ──
+    { id: "sm-e-lc1", detachment: "Librarius Conclave", name: "Celerity", points: 15, description: "ADEPTUS ASTARTES PSYKER model only. When this unit is selected to make an advance move, that move does not prevent this unit from being eligible to declare a charge. When this unit is selected to make a fall-back move, if this unit has the Biomancy Discipline ability, that move does not prevent this unit from being eligible to declare a charge." },
+    { id: "sm-e-lc2", detachment: "Librarius Conclave", name: "Prescience", points: 15, description: "ADEPTUS ASTARTES PSYKER model only (excl. TERMINATOR). Once per turn per unit: in your opponent's Movement phase, when an enemy unit ends a move within 8\" of this unit, if this unit is unengaged, this unit can make a Normal move of up to D6\" (or up to 6\" if this unit has the Divination Discipline ability)." },
+    { id: "sm-e-lc3", detachment: "Librarius Conclave", name: "Obfuscation", points: 10, description: "ADEPTUS ASTARTES PSYKER model only. This unit has Lone Operative and Stealth. If this unit has the Telepathy Discipline ability, this unit has -3\" detection range." },
+    { id: "sm-e-lc4", detachment: "Librarius Conclave", name: "Temporal Corridor", points: 20, description: "ADEPTUS ASTARTES PSYKER model only. If this unit has the Telekinesis Discipline ability, at the end of your opponent's Fight phase, if this unit is unengaged, place this unit in Strategic Reserves. This unit can make an ingress move in your next Movement phase (including in your first turn)." },
+    { id: "sm-e-lc5", detachment: "Librarius Conclave", name: "Fusillade", points: 15, description: "ADEPTUS ASTARTES PSYKER model only. This unit's ranged attacks have [LETHAL HITS]. If this unit has the Pyromancy Discipline ability, this unit's ranged attacks also have [SUSTAINED HITS 1]." },
+    // ── Reclamation Force ──
+    { id: "sm-e-rf1", detachment: "Reclamation Force", name: "Seals of Reconquest", points: 15, description: "ADEPTUS ASTARTES model only. Models in the bearer's unit have a 5+ invulnerable save." },
+    { id: "sm-e-rf2", detachment: "Reclamation Force", name: "Avenging Avatar (Aura)", points: 20, description: "ADEPTUS ASTARTES model only. In the Battle-shock step of your opponent's Command phase, if an enemy unit that is below its Starting Strength is within 9\" of the bearer, that enemy unit must take a Battle-shock test." },
+    { id: "sm-e-rf3", detachment: "Reclamation Force", name: "Scroll of Proclamation", points: 15, description: "ADEPTUS ASTARTES model only. When this unit declares a charge, if an enemy unit within 12\" of this unit is within range of an objective marker, you can use this enhancement. If you do: this unit can re-roll that charge roll, and this unit must end that charge move engaged with one or more of those enemy units." },
+    { id: "sm-e-rf4", detachment: "Reclamation Force", name: "Liberatum", points: 20, description: "ADEPTUS ASTARTES model only. Each time the bearer makes an attack that targets an enemy unit, if the target is within range of an objective marker, you can re-roll the Hit roll and you can re-roll the Wound roll." },
+    // ── Gladius Task Force ──
+    { id: "sm-e-gtf1", detachment: "Gladius Task Force", name: "Adept of the Codex", points: 20, description: "CAPTAIN model only. At the start of your Command phase, if the bearer is on the battlefield, instead of selecting a Combat Doctrine to be active for your army, you can select the Tactical Doctrine. If you do, until the start of your next Command phase, that Combat Doctrine is active for the bearer's unit only, even if you have already selected that Combat Doctrine to be active for your army this battle." },
+    { id: "sm-e-gtf2", detachment: "Gladius Task Force", name: "Artificer Armour", points: 20, description: "ADEPTUS ASTARTES model only. The bearer has a Save characteristic of 2+ and the Feel No Pain 5+ ability." },
+    { id: "sm-e-gtf3", detachment: "Gladius Task Force", name: "Fire Discipline", points: 25, description: "ADEPTUS ASTARTES model only. While the bearer is leading a unit, ranged weapons equipped by models in that unit have the [SUSTAINED HITS 1] ability. In addition, while the bearer's unit is under the effects of the Devastator Doctrine, you can re-roll Advance rolls made for that unit." },
+    { id: "sm-e-gtf4", detachment: "Gladius Task Force", name: "The Honour Vehement", points: 15, description: "ADEPTUS ASTARTES model only. Add 1 to the Attacks and Strength characteristics of the bearer's melee weapons. While the bearer is under the effects of the Assault Doctrine, add 2 to the Attacks and Strength characteristics of the bearer's melee weapons instead." },
+    // ── 1st Company Task Force ──
+    { id: "sm-e-1ctf1", detachment: "1st Company Task Force", name: "Fear Made Manifest (Aura)", points: 30, description: "ADEPTUS ASTARTES model only. While an enemy unit (excluding MONSTERS and VEHICLES) is within 6\" of the bearer, each time that unit fails a Battle-shock test, one model in that unit is destroyed (chosen by its controlling player). Once per battle, when such an enemy unit fails a Battle-shock test, you can choose for D3 models in that unit to be destroyed in this way instead." },
+    { id: "sm-e-1ctf2", detachment: "1st Company Task Force", name: "Iron Resolve", points: 15, description: "ADEPTUS ASTARTES TERMINATOR model only. The bearer has the Feel No Pain 5+ ability. Once per battle, after the bearer's unit is selected as the target of one or more attacks, the bearer can use this Enhancement. If it does, until the end of the phase, models in the bearer's unit have the Feel No Pain 5+ ability." },
+    { id: "sm-e-1ctf3", detachment: "1st Company Task Force", name: "Rites of War", points: 10, description: "ADEPTUS ASTARTES TERMINATOR model only. Improve the Objective Control characteristic of the bearer by 1. Once per battle, at the start of any phase, the bearer can use this Enhancement. If it does, until the end of the phase, add 1 to the Objective Control characteristic of all other models in the bearer's unit as well." },
+    { id: "sm-e-1ctf4", detachment: "1st Company Task Force", name: "The Imperium's Sword", points: 25, description: "ADEPTUS ASTARTES model only. Add 1 to the Attacks characteristic of the bearer's melee weapons. Once per battle, at the start of any phase, the bearer can use this Enhancement. If it does, until the end of the phase, add 1 to the Attacks characteristic of melee weapons equipped by all other models in the bearer's unit as well." },
+    // ── Vanguard Spearhead ──
+    { id: "sm-e-vs1", detachment: "Vanguard Spearhead", name: "Execute and Redeploy", points: 20, description: "PHOBOS model only. In your Shooting phase, after the bearer's unit has shot, if that unit is not within Engagement Range of one or more enemy units, it can make a Normal move of up to 6\". If it does, until the end of the turn, that unit is not eligible to declare a charge. This cannot allow the bearer's unit to move more than once in your Shooting phase." },
+    { id: "sm-e-vs2", detachment: "Vanguard Spearhead", name: "Ghostweave Cloak", points: 15, description: "ADEPTUS ASTARTES model only. The bearer has the Stealth and Lone Operative abilities." },
+    { id: "sm-e-vs3", detachment: "Vanguard Spearhead", name: "Shadow War Veteran", points: 30, description: "PHOBOS model only. Lord of Deceit (Aura): Once per turn, when your opponent targets a unit from their army within 12\" of this model with a stratagem, you can use this ability. If you do, increase the CP cost of that use of that stratagem by 1 CP." },
+    { id: "sm-e-vs4", detachment: "Vanguard Spearhead", name: "The Blade Driven Deep", points: 25, description: "ADEPTUS ASTARTES INFANTRY model only. While the bearer is leading a unit, models in that unit have the Infiltrators ability." },
+    // ── Anvil Siege Force ──
+    { id: "sm-e-asf1", detachment: "Anvil Siege Force", name: "Architect of War", points: 25, description: "ADEPTUS ASTARTES model only. While the bearer is leading a unit, ranged weapons equipped by models in that unit have the [IGNORES COVER] ability." },
+    { id: "sm-e-asf2", detachment: "Anvil Siege Force", name: "Fleet Commander", points: 15, description: "CAPTAIN model only. Once per battle, at the start of your Shooting phase, you can select one point on the battlefield and place a marker on that point. At the start of your next Shooting phase, place another marker within 12\" of the first, then draw a straight line between them. Roll one D6 for each unit that line passes over or through: on a 3+, that unit suffers D3 mortal wounds. Both markers are then removed." },
+    { id: "sm-e-asf3", detachment: "Anvil Siege Force", name: "Indomitable Fury", points: 20, description: "GRAVIS model only. The first time the bearer is destroyed, roll one D6 at the end of the phase. On a 2+, set the bearer back up on the battlefield as close as possible to where it was destroyed and not within Engagement Range of any enemy units, with its full wounds remaining." },
+    { id: "sm-e-asf4", detachment: "Anvil Siege Force", name: "Stoic Defender", points: 15, description: "ADEPTUS ASTARTES model only. While the bearer is leading a unit, models in that unit have the Feel No Pain 6+ ability while they are within range of an objective marker you control and, while that unit is Battle-shocked, halve the Objective Control characteristic of models in that unit instead of changing it to 0." },
+    // ── Subversive Assets ──
+    { id: "sm-e-sa1", detachment: "Subversive Assets", name: "Shroud Field", points: 15, description: "PHOBOS model only. This model has Lone Operative and Stealth." },
+    { id: "sm-e-sa2", detachment: "Subversive Assets", name: "Death in the Dark", points: 15, description: "INFANTRY PHOBOS unit only. This unit's attacks that target a hidden unit have +1 to Hit rolls." },
+    // ── Vengeful Hosts ──
+    { id: "sm-e-vh1", detachment: "Vengeful Hosts", name: "Avenging Angel", points: 15, description: "ADEPTUS ASTARTES FLY INFANTRY model only. When this unit ends an ingress move, select up to one enemy unit within 9\" of this unit. That enemy unit makes a Battle-shock roll, with -1 to that Battle-shock roll." },
+    { id: "sm-e-vh2", detachment: "Vengeful Hosts", name: "Orksbane", points: 20, description: "ADEPTUS ASTARTES FLY INFANTRY model only. This model has the following weapon — Orksbane [CLEAVE 2]: Melee, A4, WS 2+, S8, AP -2, D3." },
   ],
   stratagems: [
-    { id: "sm-s1", detachment: "Gladius Task Force", name: "Honour the Chapter", cost: "1 CP", phase: "Fight Phase", description: "Use when an ADEPTUS ASTARTES unit is chosen to fight. Until end of phase, re-roll Hit rolls of 1. If the target is your Oath of Moment unit, re-roll Wound rolls of 1 as well." },
-    { id: "sm-s2", detachment: "Gladius Task Force", name: "Armour of Contempt", cost: "1 CP", phase: "Shooting or Fight Phase", description: "Use when an ADEPTUS ASTARTES unit is targeted. Until end of phase, subtract 1 from the Damage of attacks allocated to models in that unit (minimum 1)." },
-    { id: "sm-s3", detachment: "Ironstorm Spearhead", name: "Rapid Fire", cost: "1 CP", phase: "Shooting Phase", description: "Use when an ADEPTUS ASTARTES INFANTRY unit is chosen to shoot. Until end of phase, increase the Rapid Fire value of bolt weapons in that unit by 1." },
-    { id: "sm-s4", detachment: "Gladius Task Force", name: "Codex Discipline", cost: "1 CP", phase: "Any Phase", description: "Use at the start of any phase. Select one ADEPTUS ASTARTES unit that is Battle-shocked. That unit is no longer Battle-shocked." },
-    { id: "sm-s5", detachment: "Stormlance Task Force", name: "Skilled Riders", cost: "1 CP", phase: "Movement Phase", description: "Use when an ADEPTUS ASTARTES MOUNTED or BIKER unit Advances. Until end of turn, that unit can still shoot and charge." },
-    { id: "sm-s6", detachment: "1st Company Task Force", name: "Teleport Homer", cost: "1 CP", phase: "Movement Phase", description: "Use at end of your opponent's Fight phase. Remove one ADEPTUS ASTARTES TERMINATOR unit from the battlefield into Strategic Reserves. It returns via Deep Strike next Movement phase." },
-    { id: "sm-s7", detachment: "Anvil Siege Force", name: "Transhuman Physiology", cost: "1 CP", phase: "Shooting or Fight Phase", description: "Use when an ADEPTUS ASTARTES INFANTRY unit is targeted. Until end of phase, unmodified Wound rolls of 1–3 always fail against that unit." },
-    { id: "sm-s8", detachment: "1st Company Task Force", name: "Only in Death Does Duty End", cost: "2 CP", phase: "Fight Phase", description: "Use when an ADEPTUS ASTARTES CHARACTER model is destroyed by a melee attack. Before the model is removed, it can fight as if it were your Fight phase." },
+    // ── Armoured Speartip ──
+    { id: "sm-s-as1", detachment: "Armoured Speartip", name: "Machine Wrath", cost: "1 CP", phase: "Any Phase (Epic Deed)", description: "WHEN: Any phase, just after a HEAVY TRANSPORT unit from your army with the Deadly Demise ability is destroyed. TARGET: That HEAVY TRANSPORT unit, if you rolled a 6 for its Deadly Demise ability. EFFECT: Your unit can make a Normal or Fall Back move before its Deadly Demise ability is resolved. When making this move, your unit can move through enemy models (excluding MONSTERS and VEHICLES) and can move within Engagement Range of such models, but cannot end that move within Engagement Range of them, and any Desperate Escape test is automatically passed." },
+    { id: "sm-s-as2", detachment: "Armoured Speartip", name: "Armour of Contempt", cost: "1 CP", phase: "Shooting or Fight Phase", description: "WHEN: Your opponent's Shooting phase or the Fight phase, just after an enemy unit has selected its targets. TARGET: One ADEPTUS ASTARTES unit from your army that was selected as the target of one or more of the attacking unit's attacks. EFFECT: Until the attacking unit has finished making its attacks, each time an attack targets your unit, worsen the Armour Penetration characteristic of that attack by 1." },
+    { id: "sm-s-as3", detachment: "Armoured Speartip", name: "Rapid Embarkation", cost: "1 CP", phase: "Fight Phase (Wargear)", description: "WHEN: End of the Fight phase. TARGET: One ADEPTUS ASTARTES INFANTRY unit from your army that is not within Engagement Range of one or more enemy units, and one friendly HEAVY TRANSPORT it is able to embark within. EFFECT: If your ADEPTUS ASTARTES INFANTRY unit is wholly within 6\" of that HEAVY TRANSPORT, it can embark within it." },
+    { id: "sm-s-as4", detachment: "Armoured Speartip", name: "Ceramite Sledgehammer", cost: "1 CP", phase: "Movement Phase", description: "WHEN: Your Movement phase. TARGET: One ADEPTUS ASTARTES TRANSPORT unit from your army that has not been selected to move this phase. EFFECT: Until the end of the phase, each time your unit makes a Normal or Advance move, it can move horizontally through terrain features. In addition, if your unit is a HEAVY TRANSPORT, when making this move, your unit can move through enemy models (excluding MONSTERS and VEHICLES) and can move within Engagement Range of such models, but cannot end that move within Engagement Range of them, and any Desperate Escape test is automatically passed." },
+    { id: "sm-s-as5", detachment: "Armoured Speartip", name: "Advanced Deployment", cost: "1 CP", phase: "Movement Phase", description: "WHEN: Your Movement phase. TARGET: One ADEPTUS ASTARTES TRANSPORT unit from your army that has not been selected to move this phase. EFFECT: Until the end of the phase, units can disembark from your TRANSPORT after it has Advanced. Units that do so count as having made a Normal move this phase, and cannot declare a charge in the same turn (unless your TRANSPORT has the Assault Ramp ability), but can otherwise act normally." },
+    { id: "sm-s-as6", detachment: "Armoured Speartip", name: "Purgation Doctrine", cost: "1 CP", phase: "Shooting Phase", description: "WHEN: Your Shooting phase. TARGET: One ADEPTUS ASTARTES unit from your army that has not been selected to shoot this phase. EFFECT: Until the end of the phase, each time a model in your unit makes an attack, add 1 to the Hit roll (if your unit disembarked from a HEAVY TRANSPORT this turn, add 1 to the Wound roll as well)." },
+    // ── Bastion Task Force ──
+    { id: "sm-s-btf1", detachment: "Bastion Task Force", name: "Codex Discipline", cost: "1 CP", phase: "Shooting or Fight Phase", description: "WHEN: Your Shooting phase or the Fight phase. TARGET: One ADEPTUS ASTARTES unit from your army that has not been selected to shoot or fight this phase. EFFECT: Until the end of the phase, each time a model in your unit makes an attack that targets an enemy unit, re-roll a Hit roll of 1. If that target is auspex scanned, re-roll a Wound roll of 1 as well." },
+    { id: "sm-s-btf2", detachment: "Bastion Task Force", name: "Guided Disruption", cost: "1 CP", phase: "Shooting or Fight Phase", description: "WHEN: Your Shooting phase or the Fight phase, just after an ADEPTUS ASTARTES BATTLELINE unit from your army has finished making its attacks. TARGET: That ADEPTUS ASTARTES BATTLELINE unit. EFFECT: When an enemy unit is auspex scanned as a result of those attacks this turn, if that enemy unit does not have the MONSTER or VEHICLE keywords, until the start of your next turn, it is pinned. While a unit is pinned, subtract 2 from that unit's Move characteristic and subtract 2 from Charge rolls made for that unit." },
+    { id: "sm-s-btf3", detachment: "Bastion Task Force", name: "Light of Vengeance", cost: "1 CP", phase: "Shooting or Fight Phase", description: "WHEN: Your Shooting phase or the Fight phase. TARGET: One ADEPTUS ASTARTES unit from your army that has not been selected to shoot or fight this phase. EFFECT: Select either the [LETHAL HITS] or [SUSTAINED HITS 1] ability. Until the end of the phase, weapons equipped by models in your unit have that ability while targeting an auspex scanned unit or if the bearer has the BATTLELINE keyword." },
+    { id: "sm-s-btf4", detachment: "Bastion Task Force", name: "Shock Bombardment", cost: "1 CP", phase: "Shooting or Fight Phase", description: "WHEN: Your Shooting phase or the Fight phase, just after an ADEPTUS ASTARTES BATTLELINE unit from your army finished making its attacks. TARGET: That ADEPTUS ASTARTES BATTLELINE unit. EFFECT: When an enemy unit is auspex scanned as a result of those attacks this turn, until the start of your next turn, each time a model in that unit makes an attack, subtract 1 from the Hit roll." },
+    { id: "sm-s-btf5", detachment: "Bastion Task Force", name: "Angels Defiant", cost: "1 CP", phase: "Fight Phase", description: "WHEN: Your opponent's Shooting phase or the Fight phase, just after an enemy unit has selected its targets. TARGET: One ADEPTUS ASTARTES BATTLELINE unit from your army that was selected as the target of one or more of the attacking unit's attacks. EFFECT: Until the end of the phase, each time an attack targets your unit, if the Strength characteristic of that attack is greater than the Toughness characteristic of your unit, subtract 1 from the Wound roll." },
+    { id: "sm-s-btf6", detachment: "Bastion Task Force", name: "Heresy Undone", cost: "1 CP", phase: "Shooting or Charge Phase", description: "WHEN: Your Shooting phase or your Charge phase. TARGET: One ADEPTUS ASTARTES unit (excluding BATTLELINE units) from your army. EFFECT: Until the end of the phase, your unit is eligible to shoot and declare a charge in a turn in which it Advanced or Fell Back. If it does, every target of that charge and every target of those attacks must be an auspex scanned unit." },
+    // ── Blade of Ultramar ──
+    { id: "sm-s-bou1", detachment: "Blade of Ultramar", name: "Armour of Contempt", cost: "1 CP", phase: "Shooting or Fight Phase (Epic Deed)", description: "WHEN: Your opponent's Shooting phase or the Fight phase, just after an enemy unit has selected its targets. TARGET: One ADEPTUS ASTARTES unit from your army that was selected as the target of one or more of the attacking unit's attacks. EFFECT: Until the attacking unit has finished making its attacks, each time an attack targets your unit, worsen the Armour Penetration characteristic of that attack by 1." },
+    { id: "sm-s-bou2", detachment: "Blade of Ultramar", name: "Tactical Foresight", cost: "1 CP", phase: "Shooting or Fight Phase (Epic Deed)", description: "WHEN: Your opponent's Shooting phase or the Fight phase, just after an enemy unit has selected its targets. TARGET: One ADEPTUS ASTARTES unit from your army that was selected as the target of one or more of the attacking unit's attacks. EFFECT: Until the end of the phase, each time an attack targets your unit, if the Strength characteristic of that attack is greater than or equal to the Toughness characteristic of that unit, subtract 1 from the Wound roll." },
+    { id: "sm-s-bou3", detachment: "Blade of Ultramar", name: "Courage and Honour!", cost: "1 CP", phase: "Fight Phase", description: "WHEN: Fight phase. TARGET: One ADEPTUS ASTARTES unit from your army. EFFECT: Until the end of the phase, melee weapons equipped by models in your unit have the [LANCE] ability. If your unit is under the effects of the Assault Doctrine, until the end of the phase, improve the Armour Penetration characteristic of such weapons by 1 as well." },
+    { id: "sm-s-bou4", detachment: "Blade of Ultramar", name: "Ultramarian Adaptivity", cost: "1 CP", phase: "Command Phase", description: "WHEN: Your Command phase. TARGET: One ADEPTUS ASTARTES unit from your army. EFFECT: Select the Devastator Doctrine, Tactical Doctrine or Assault Doctrine. Until the start of your next Command phase, that Combat Doctrine is active for your unit instead of any other Combat Doctrine that is active for your army, even if you have already selected that Combat Doctrine this battle." },
+    { id: "sm-s-bou5", detachment: "Blade of Ultramar", name: "Exemplary Vigilance", cost: "1 CP", phase: "Shooting Phase", description: "WHEN: Your Shooting phase. TARGET: One ADEPTUS ASTARTES unit from your army that has not been selected to shoot this phase. EFFECT: Until the end of the phase, ranged weapons equipped by models in your unit have the [IGNORES COVER] ability. If your unit is under the effects of the Devastator Doctrine, until the end of the phase, improve the Armour Penetration characteristic of such weapons by 1 as well." },
+    { id: "sm-s-bou6", detachment: "Blade of Ultramar", name: "Practical Tactics", cost: "1 CP", phase: "Movement Phase", description: "WHEN: Your opponent's Movement phase, just after an enemy unit ends a Normal, Advance or Fall Back move. TARGET: One ADEPTUS ASTARTES INFANTRY or ADEPTUS ASTARTES MOUNTED unit from your army that is not within Engagement Range of one or more enemy units and is within 8\" of the enemy unit that just ended that move. EFFECT: Your unit can make a Normal move of up to D6\", or a Normal move of up to 6\" instead if it is under the effects of the Tactical Doctrine." },
+    // ── Ceramite Sentinels ──
+    { id: "sm-s-cs1", detachment: "Ceramite Sentinels", name: "Unyielding Might", cost: "1 CP", phase: "Command Phase", description: "WHEN: Command phase. TARGET: One ADEPTUS ASTARTES unit from your army that is within Engagement Range of one or more enemy units. EFFECT: Until the start of your next Command phase, add 1 to the Objective Control characteristics of models in your unit." },
+    { id: "sm-s-cs2", detachment: "Ceramite Sentinels", name: "Priority Strike", cost: "2 CP", phase: "Shooting or Fight Phase", description: "WHEN: Your Shooting phase or the Fight phase. TARGET: One ADEPTUS ASTARTES INFANTRY or ADEPTUS ASTARTES MOUNTED unit from your army that has not been selected to shoot or fight this phase. EFFECT: Until the end of the phase, each time a model in your unit makes a ranged attack that targets a CHARACTER, MONSTER or VEHICLE unit, you can re-roll the Wound roll." },
+    { id: "sm-s-cs3", detachment: "Ceramite Sentinels", name: "Armour of Contempt", cost: "1 CP", phase: "Shooting or Fight Phase", description: "WHEN: Your opponent's Shooting phase or the Fight phase, just after an enemy unit has selected its targets. TARGET: One ADEPTUS ASTARTES unit from your army that was selected as the target of one or more of the attacking unit's attacks. EFFECT: Until the attacking unit has finished making its attacks, each time an attack targets your unit, worsen the Armour Penetration characteristic of that attack by 1." },
+    { id: "sm-s-cs4", detachment: "Ceramite Sentinels", name: "Stand to the End", cost: "1 CP", phase: "Fight Phase (Epic Deed)", description: "WHEN: Fight phase, just after an enemy unit has selected its targets. TARGET: One ADEPTUS ASTARTES unit from your army that was selected as the target of one or more of the attacking unit's attacks. EFFECT: Until the end of the phase, each time a model in your unit is destroyed, if that model has not fought this phase, roll one D6: if it is an ENTRENCHED unit, on a 4+, do not remove it from play. That destroyed model can fight after the attacking unit has finished making its attacks, and is then removed from play." },
+    { id: "sm-s-cs5", detachment: "Ceramite Sentinels", name: "Augmented Targeting", cost: "1 CP", phase: "Shooting Phase", description: "WHEN: Your Shooting phase. TARGET: One ADEPTUS ASTARTES unit from your army that has not been selected to shoot this phase. EFFECT: Select either the [SUSTAINED HITS 1] or [LETHAL HITS] ability. Until the end of the phase, ranged weapons equipped by models in your unit have the selected ability. If your unit is ENTRENCHED, until the end of the phase, ranged weapons equipped by models in your unit have both the [SUSTAINED HITS 1] and [LETHAL HITS] abilities instead." },
+    { id: "sm-s-cs6", detachment: "Ceramite Sentinels", name: "Evasive Repositioning", cost: "1 CP", phase: "Shooting Phase", description: "WHEN: Your opponent's Shooting phase, just after an enemy unit has shot. TARGET: One ADEPTUS ASTARTES INFANTRY or ADEPTUS ASTARTES MOUNTED unit from your army that was selected as the target of one or more of the attacking unit's attacks. EFFECT: Your unit can make a Normal move of up to D6\". If your unit is ENTRENCHED, you can re-roll the D6 to determine how far your unit can move." },
+    // ── Fulguris Task Force ──
+    { id: "sm-s-ftf1", detachment: "Fulguris Task Force", name: "Data-Link Augury", cost: "1 CP", phase: "Shooting Phase", description: "WHEN: Your Shooting phase, when a friendly SPEEDER unit is selected to shoot. TARGET: That SPEEDER unit. EFFECT: Select one enemy unit within 24\" of your unit. That enemy unit has +6\" detection range until your unit has shot." },
+    { id: "sm-s-ftf2", detachment: "Fulguris Task Force", name: "Reactive Evasion", cost: "1 CP", phase: "Movement Phase", description: "WHEN: Your opponent's Movement phase, when an enemy unit ends a move within 8\" of a friendly unengaged SPEEDER unit. TARGET: That SPEEDER unit. EFFECT: Your unit can make a normal move of up to D3+3\"." },
+    { id: "sm-s-ftf3", detachment: "Fulguris Task Force", name: "Anti-Grav Surge", cost: "1 CP", phase: "Fight Phase", description: "WHEN: End of your opponent's Fight phase. TARGET: One friendly unengaged SPEEDER unit. EFFECT: Place your unit in strategic reserves." },
+    // ── Headhunter Task Force ──
+    { id: "sm-s-htf1", detachment: "Headhunter Task Force", name: "Armour of Contempt", cost: "1 CP", phase: "Shooting or Fight Phase", description: "WHEN: Your opponent's Shooting phase or the Fight phase, just after an enemy unit has selected its targets. TARGET: One ADEPTUS ASTARTES unit from your army that was selected as the target of one or more of the attacking unit's attacks. EFFECT: Until the attacking unit has finished making its attacks, each time an attack targets your unit, worsen the Armour Penetration characteristic of that attack by 1." },
+    { id: "sm-s-htf2", detachment: "Headhunter Task Force", name: "Target Weak Point", cost: "1 CP", phase: "Shooting Phase", description: "WHEN: Your Shooting phase. TARGET: One TANK ACE unit from your army that has not been selected to shoot this phase. EFFECT: Until the end of the phase, each time a model in your unit makes a ranged attack that targets a MONSTER or VEHICLE unit, improve the Armour Penetration characteristic of that attack by 1. Restriction: A unit cannot be targeted with this and the Kill Shot Stratagem in the same phase." },
+    { id: "sm-s-htf3", detachment: "Headhunter Task Force", name: "Kill Shot", cost: "1 CP", phase: "Shooting Phase", description: "WHEN: Your Shooting phase. TARGET: One TANK ACE unit from your army that has not been selected to shoot this phase. EFFECT: Until the end of the phase, each time a model in your unit makes an attack that targets a MONSTER or VEHICLE unit, re-roll a Wound roll of 1. If the target unit is below its Starting Strength, you can re-roll the Wound roll instead. Restriction: A unit cannot be targeted with this and the Target Weak Point Stratagem in the same phase." },
+    { id: "sm-s-htf4", detachment: "Headhunter Task Force", name: "Rapid Gunnery", cost: "1 CP", phase: "Shooting Phase", description: "WHEN: Your Shooting phase. TARGET: One ADEPTUS ASTARTES unit from your army that has not been selected to shoot this phase. EFFECT: Until the end of the phase, your unit is eligible to shoot in a turn in which it Fell Back." },
+    { id: "sm-s-htf5", detachment: "Headhunter Task Force", name: "Reactive Repositioning", cost: "1 CP", phase: "Movement Phase", description: "WHEN: Your opponent's Movement phase, just after an enemy unit ends a Normal, Advance or Fall Back move. TARGET: One TANK ACE unit from your army (excluding units containing one or more models with a Wounds characteristic of 16+) that is within 8\" of that enemy unit. EFFECT: Your unit can make a Normal move of up to D6\"." },
+    { id: "sm-s-htf6", detachment: "Headhunter Task Force", name: "Machine Vengeance", cost: "1 CP", phase: "Shooting Phase (Epic Deed)", description: "WHEN: Your opponent's Shooting phase, just after an enemy unit has shot. TARGET: One TANK ACE unit from your army (excluding units containing one or more models with a Wounds characteristic of 16+) that was selected as the target of one or more of the attacking unit's attacks. EFFECT: Your unit can shoot as if it were your Shooting phase, but must target only that enemy unit when doing so, and can only do so if that enemy unit is visible and an eligible target." },
+    // ── Librarius Conclave (no stratagems shown on card) ──
+    // ── Reclamation Force ──
+    { id: "sm-s-rf1", detachment: "Reclamation Force", name: "Crusading Conquerors", cost: "1 CP", phase: "Command Phase", description: "WHEN: End of the Command phase. TARGET: One ADEPTUS ASTARTES unit from your army. EFFECT: Until the start of the next Command phase, add 1 to the Objective Control characteristic of models in your unit." },
+    { id: "sm-s-rf2", detachment: "Reclamation Force", name: "Furious Dedication", cost: "1 CP", phase: "Charge or Fight Phase", description: "WHEN: Your Charge phase or the Fight phase. TARGET: One ADEPTUS ASTARTES unit from your army that has not declared a charge or been selected to fight this phase. EFFECT: Until the end of the turn, add 2 to Charge rolls made for your unit and add 1 to the Attacks characteristic of melee weapons equipped by models in your unit. Restriction: You cannot use this Stratagem more than once per turn." },
+    { id: "sm-s-rf3", detachment: "Reclamation Force", name: "Fight to the End", cost: "1 CP", phase: "Fight Phase", description: "WHEN: Fight phase, just after an enemy unit has selected its targets. TARGET: One ADEPTUS ASTARTES unit from your army that was selected as the target of one or more of the attacking unit's attacks. EFFECT: Until the end of the phase, each time a model in your unit is destroyed, if that model has not fought this phase, roll one D6: on a 4+, do not remove the destroyed model from play; it can fight after the attacking unit has finished making its attacks, and is then removed from play." },
+    { id: "sm-s-rf4", detachment: "Reclamation Force", name: "Scions of Guilliman", cost: "1 CP", phase: "Movement Phase", description: "WHEN: Your Movement phase, just after an ADEPTUS ASTARTES unit from your army ends a Fall Back move. TARGET: That ADEPTUS ASTARTES unit. EFFECT: Until the end of the turn, your unit is eligible to shoot and declare a charge in a turn in which it Fell Back." },
+    { id: "sm-s-rf5", detachment: "Reclamation Force", name: "Ultramarian Destiny", cost: "1 CP", phase: "Movement Phase", description: "WHEN: Your Movement phase. TARGET: One ADEPTUS ASTARTES unit from your army. EFFECT: Select one objective marker your unit is within range of. That objective marker remains under your control until your opponent's Level of Control over that objective marker is greater than yours at the end of a phase." },
+    { id: "sm-s-rf6", detachment: "Reclamation Force", name: "Marching Ever On", cost: "1 CP", phase: "Movement Phase", description: "WHEN: Your opponent's Movement phase, just after an enemy unit Falls Back. TARGET: One ADEPTUS ASTARTES unit from your army that was within Engagement Range of that enemy unit at the start of the phase. EFFECT: Your unit can make a Normal move of up to D6\"+1." },
+    // ── Gladius Task Force ──
+    { id: "sm-s-gtf1", detachment: "Gladius Task Force", name: "Armour of Contempt", cost: "1 CP", phase: "Shooting or Fight Phase (Battle Tactic)", description: "WHEN: Your opponent's Shooting phase or the Fight phase, just after an enemy unit has selected its targets. TARGET: One ADEPTUS ASTARTES unit from your army that was selected as the target of one or more of the attacking unit's attacks. EFFECT: Until the attacking unit has finished making its attacks, each time an attack targets your unit, worsen the Armour Penetration characteristic of that attack by 1." },
+    { id: "sm-s-gtf2", detachment: "Gladius Task Force", name: "Only in Death Does Duty End", cost: "2 CP", phase: "Fight Phase (Epic Deed)", description: "WHEN: Fight phase, just after an enemy unit has selected its targets. TARGET: One ADEPTUS ASTARTES unit from your army that was selected as the target of one or more of the attacking unit's attacks. EFFECT: Until the end of the phase, each time a model in your unit is destroyed, if that model has not fought this phase, do not remove it from play. The destroyed model can fight after the attacking model's unit has finished making its attacks, and is then removed from play." },
+    { id: "sm-s-gtf3", detachment: "Gladius Task Force", name: "Honour the Chapter", cost: "1 CP", phase: "Fight Phase (Battle Tactic)", description: "WHEN: Fight phase. TARGET: One ADEPTUS ASTARTES unit from your army. EFFECT: Until the end of the phase, melee weapons equipped by models in your unit have the [LANCE] ability. If your unit is under the effects of the Assault Doctrine, until the end of the phase, improve the Armour Penetration characteristic of such weapons by 1 as well." },
+    { id: "sm-s-gtf4", detachment: "Gladius Task Force", name: "Adaptive Strategy", cost: "1 CP", phase: "Command Phase (Strategic Ploy)", description: "WHEN: Your Command phase. TARGET: One ADEPTUS ASTARTES unit from your army. EFFECT: Select the Devastator Doctrine, Tactical Doctrine or Assault Doctrine. Until the start of your next Command phase, that Combat Doctrine is active for that unit instead of any other Combat Doctrine that is active for your army, even if you have already selected that Combat Doctrine this battle." },
+    { id: "sm-s-gtf5", detachment: "Gladius Task Force", name: "Storm of Fire", cost: "1 CP", phase: "Shooting Phase (Battle Tactic)", description: "WHEN: Your Shooting phase. TARGET: One ADEPTUS ASTARTES unit from your army that has not been selected to shoot this phase. EFFECT: Until the end of the phase, ranged weapons equipped by models in your unit have the [IGNORES COVER] ability. If your unit is under the effects of the Devastator Doctrine, until the end of the phase, improve the Armour Penetration characteristic of such weapons by 1 as well." },
+    { id: "sm-s-gtf6", detachment: "Gladius Task Force", name: "Squad Tactics", cost: "1 CP", phase: "Movement Phase (Strategic Ploy)", description: "WHEN: Your opponent's Movement phase, just after an enemy unit ends a Normal, Advance or Fall Back move. TARGET: One ADEPTUS ASTARTES INFANTRY or ADEPTUS ASTARTES MOUNTED unit from your army that is within 8\" of the enemy unit that just ended that move and is not within Engagement Range of one or more enemy units. EFFECT: Your unit can make a Normal move of up to D6\", or a Normal move of up to 6\" instead if it is under the effects of the Tactical Doctrine." },
+    // ── 1st Company Task Force ──
+    { id: "sm-s-1ctf1", detachment: "1st Company Task Force", name: "Armour of Contempt", cost: "1 CP", phase: "Shooting or Fight Phase (Battle Tactic)", description: "WHEN: Your opponent's Shooting phase or the Fight phase, just after an enemy unit has selected its targets. TARGET: One ADEPTUS ASTARTES unit from your army that was selected as the target of one or more of the attacking unit's attacks. EFFECT: Until the attacking unit has finished making its attacks, each time an attack targets your unit, worsen the Armour Penetration characteristic of that attack by 1." },
+    { id: "sm-s-1ctf2", detachment: "1st Company Task Force", name: "Heroes of the Chapter", cost: "1 CP", phase: "Shooting or Fight Phase (Battle Tactic)", description: "WHEN: Your Shooting phase or the Fight phase. TARGET: One ADEPTUS ASTARTES TERMINATOR, BLADEGUARD VETERAN SQUAD, STERNGUARD VETERAN SQUAD or VANGUARD VETERAN SQUAD unit from your army that has not been selected to shoot or fight this phase. EFFECT: Until the end of the phase, each time a model in your unit makes an attack, add 1 to the Hit roll. If your unit is Below Half-strength, add 1 to the Wound roll as well." },
+    { id: "sm-s-1ctf3", detachment: "1st Company Task Force", name: "Terrifying Proficiency", cost: "1 CP", phase: "Fight Phase (Strategic Ploy)", description: "WHEN: Your Fight phase. TARGET: One ADEPTUS ASTARTES TERMINATOR, BLADEGUARD VETERAN SQUAD, STERNGUARD VETERAN SQUAD or VANGUARD VETERAN SQUAD unit from your army that made a Charge move this turn and destroyed one or more enemy units this phase. EFFECT: In your opponent's next Command phase, each enemy unit within 6\" of your unit must take a Battle-shock test. If the unit taking that test is Below Half-strength, subtract 1 from that test. Enemy units affected do not need to take any other Battle-shock tests in the same phase." },
+    { id: "sm-s-1ctf4", detachment: "1st Company Task Force", name: "Duty and Honour", cost: "1 CP", phase: "Movement Phase (Strategic Ploy)", description: "WHEN: Your Movement phase. TARGET: One ADEPTUS ASTARTES TERMINATOR, BLADEGUARD VETERAN SQUAD, STERNGUARD VETERAN SQUAD or VANGUARD VETERAN SQUAD unit from your army within range of an objective marker you control. EFFECT: That objective marker remains under your control until your opponent's Level of Control over that objective marker is greater than yours at the end of a phase." },
+    { id: "sm-s-1ctf5", detachment: "1st Company Task Force", name: "Orbital Teleportarium", cost: "1 CP", phase: "Fight Phase (Strategic Ploy)", description: "WHEN: End of your opponent's Fight phase. TARGET: One ADEPTUS ASTARTES TERMINATOR unit from your army that is not within Engagement Range of one or more enemy units. EFFECT: Remove your unit from the battlefield and place it into Strategic Reserves. It will arrive back on the battlefield in the Reinforcements step of your next Movement phase using the Deep Strike ability." },
+    { id: "sm-s-1ctf6", detachment: "1st Company Task Force", name: "Legendary Fortitude", cost: "1 CP", phase: "Charge Phase (Battle Tactic)", description: "WHEN: Your opponent's Charge phase, just after an enemy unit ends a Charge move. TARGET: One ADEPTUS ASTARTES TERMINATOR, BLADEGUARD VETERAN SQUAD, STERNGUARD VETERAN SQUAD or VANGUARD VETERAN SQUAD unit from your army within Engagement Range of that enemy unit. EFFECT: Until the end of the turn, each time an attack is allocated to a model in your unit, subtract 1 from the Damage characteristic of that attack." },
+    // ── Vanguard Spearhead ──
+    { id: "sm-s-vs1", detachment: "Vanguard Spearhead", name: "A Deadly Prize", cost: "1 CP", phase: "Command Phase (Wargear)", description: "WHEN: Start of the Command phase. TARGET: One ADEPTUS ASTARTES INFANTRY or ADEPTUS ASTARTES MOUNTED unit from your army within range of an objective marker you control. EFFECT: That objective marker is Sabotaged, and remains under your control even if you have no models within range of it, until your opponent controls it at the start or end of any turn. While Sabotaged and under your control, each time an enemy unit ends a Normal, Advance, Fall Back or Charge move within range of that objective marker, roll one D6: on a 2+, that enemy unit suffers D3 mortal wounds." },
+    { id: "sm-s-vs2", detachment: "Vanguard Spearhead", name: "Armour of Contempt", cost: "1 CP", phase: "Shooting or Fight Phase (Battle Tactic)", description: "WHEN: Your opponent's Shooting phase or the Fight phase, just after an enemy unit has selected its targets. TARGET: One ADEPTUS ASTARTES unit from your army that was selected as the target of one or more of the attacking unit's attacks. EFFECT: Until the attacking unit has finished making its attacks, each time an attack targets your unit, worsen the Armour Penetration characteristic of that attack by 1." },
+    { id: "sm-s-vs3", detachment: "Vanguard Spearhead", name: "Surgical Strikes", cost: "2 CP", phase: "Fight Phase (Battle Tactic)", description: "WHEN: Fight phase. TARGET: One ADEPTUS ASTARTES INFANTRY unit from your army that has not been selected to fight this phase. EFFECT: Until the end of the phase, melee weapons equipped by models in your unit have the [PRECISION] ability." },
+    { id: "sm-s-vs4", detachment: "Vanguard Spearhead", name: "Strike From The Shadows", cost: "1 CP", phase: "Shooting Phase (Battle Tactic)", description: "WHEN: Your Shooting phase. TARGET: One ADEPTUS ASTARTES INFANTRY unit from your army that has not been selected to shoot this phase. EFFECT: Until the end of the phase, each time a model in your unit makes a ranged attack that targets an enemy unit that is more than 12\" away, improve the Ballistic Skill and Armour Penetration characteristics of that attack by 1. If one or more enemy models are destroyed as a result of those attacks, select one of those destroyed models; that destroyed model's unit must take a Battle-shock test." },
+    { id: "sm-s-vs5", detachment: "Vanguard Spearhead", name: "Calculated Feint", cost: "1 CP", phase: "Charge Phase (Strategic Ploy)", description: "WHEN: Your opponent's Charge phase, just after an enemy unit declares a charge. TARGET: One friendly ADEPTUS ASTARTES INFANTRY unit within 12\" of that enemy unit that is not within Engagement Range of one or more enemy units. EFFECT: Your unit can make a Normal move of up to D6\", or up to 6\" instead if it is a PHOBOS or SCOUT SQUAD unit." },
+    { id: "sm-s-vs6", detachment: "Vanguard Spearhead", name: "Guerrilla Tactics", cost: "1 CP", phase: "Fight Phase (Strategic Ploy)", description: "WHEN: End of your opponent's Fight phase. TARGET: Up to two PHOBOS and/or SCOUT SQUAD units from your army that are more than 3\" away from all enemy models, or one other ADEPTUS ASTARTES INFANTRY unit from your army that is more than 3\" away from all enemy models. EFFECT: Remove those units from the battlefield and place them into Strategic Reserves." },
+    // ── Anvil Siege Force ──
+    { id: "sm-s-asf1", detachment: "Anvil Siege Force", name: "Armour of Contempt", cost: "1 CP", phase: "Shooting or Fight Phase (Battle Tactic)", description: "WHEN: Your opponent's Shooting phase or the Fight phase, just after an enemy unit has selected its targets. TARGET: One ADEPTUS ASTARTES unit from your army that was selected as the target of one or more of the attacking unit's attacks. EFFECT: Until the attacking unit has finished making its attacks, each time an attack targets your unit, worsen the Armour Penetration characteristic of that attack by 1." },
+    { id: "sm-s-asf2", detachment: "Anvil Siege Force", name: "Rigid Discipline", cost: "1 CP", phase: "Fight Phase (Strategic Ploy)", description: "WHEN: End of the Fight phase. TARGET: One ADEPTUS ASTARTES unit from your army that is within Engagement Range of one or more enemy units. EFFECT: Your unit can immediately make a Fall Back move of up to 6\". When making that move, your unit must end that move either wholly within your deployment zone or within range of an objective marker." },
+    { id: "sm-s-asf3", detachment: "Anvil Siege Force", name: "Not One Backwards Step", cost: "1 CP", phase: "Command Phase (Strategic Ploy)", description: "WHEN: Your Command phase. TARGET: One ADEPTUS ASTARTES INFANTRY unit from your army within range of an objective marker. EFFECT: Until the end of the turn, double the Objective Control characteristic of models in your unit, but it must Remain Stationary this turn." },
+    { id: "sm-s-asf4", detachment: "Anvil Siege Force", name: "No Threat Too Great", cost: "2 CP", phase: "Shooting Phase (Battle Tactic)", description: "WHEN: Your Shooting phase. TARGET: One ADEPTUS ASTARTES unit from your army that has not been selected to shoot this phase. EFFECT: Until the end of the phase, each time a model in your unit makes a ranged attack that targets a MONSTER or VEHICLE unit, you can re-roll the Wound roll." },
+    { id: "sm-s-asf5", detachment: "Anvil Siege Force", name: "Battle Drill Recall", cost: "1 CP", phase: "Shooting Phase (Battle Tactic)", description: "WHEN: Your Shooting phase. TARGET: One ADEPTUS ASTARTES unit from your army that has not been selected to shoot this phase. EFFECT: Until the end of the phase, ranged weapons equipped by models in your unit have the [SUSTAINED HITS 1] ability. If your unit Remained Stationary this turn, until the end of the phase, each time a model in your unit makes a ranged attack, a successful unmodified Hit roll of 5+ scores a Critical Hit." },
+    { id: "sm-s-asf6", detachment: "Anvil Siege Force", name: "Hail of Vengeance", cost: "1 CP", phase: "Shooting Phase (Strategic Ploy)", description: "WHEN: Your opponent's Shooting phase, just after an enemy unit has resolved its attacks. TARGET: One ADEPTUS ASTARTES unit from your army that had one or more of its models destroyed as a result of the attacking unit's attacks. EFFECT: Your unit can shoot as if it were your Shooting phase, but must target only that enemy unit when doing so, and can only do so if that enemy unit is an eligible target." },
+    // ── Subversive Assets ──
+    { id: "sm-s-sa1", detachment: "Subversive Assets", name: "Adaptive Operations", cost: "1 CP", phase: "Shooting Phase", description: "WHEN: Your Shooting phase, when a friendly PHOBOS/SCOUT SQUAD unit starts an action. TARGET: That PHOBOS/SCOUT SQUAD unit. EFFECT: That action does not prevent your unit from being eligible to shoot." },
+    { id: "sm-s-sa2", detachment: "Subversive Assets", name: "Strike from the Shadows", cost: "1 CP", phase: "Shooting Phase", description: "WHEN: Your Shooting phase, when a friendly PHOBOS/SCOUT SQUAD unit has shot. TARGET: That PHOBOS/SCOUT SQUAD unit. EFFECT: Those ranged attacks do not prevent your unit from being hidden." },
+    { id: "sm-s-sa3", detachment: "Subversive Assets", name: "Cloaked Position", cost: "1 CP", phase: "Movement Phase", description: "WHEN: Start of your opponent's Movement phase. TARGET: One friendly unengaged PHOBOS/SCOUT SQUAD unit. EFFECT: Your unit has -3\" detection range until the end of the turn." },
+    // ── Vengeful Hosts ──
+    { id: "sm-s-vh1", detachment: "Vengeful Hosts", name: "Meteoric Onslaught", cost: "1 CP", phase: "Fight Phase", description: "WHEN: Fight phase, when a friendly ADEPTUS ASTARTES FLY INFANTRY unit that made a charge move this turn is selected to attack. TARGET: That friendly ADEPTUS ASTARTES FLY INFANTRY unit. EFFECT: Your unit's melee attacks have +1 S." },
+    { id: "sm-s-vh2", detachment: "Vengeful Hosts", name: "Purge by Sectors", cost: "1 CP", phase: "Fight Phase", description: "WHEN: End of the Fight phase. TARGET: One friendly unengaged ADEPTUS ASTARTES FLY INFANTRY unit that was eligible to fight this phase. EFFECT: Your unit can make a normal move of up to D3+3\"." },
+    { id: "sm-s-vh3", detachment: "Vengeful Hosts", name: "Know No Fear", cost: "1 CP", phase: "Command Phase", description: "WHEN: Your Command phase. TARGET: One friendly battle-shocked ADEPTUS ASTARTES unit. You can target that unit with this stratagem even though it is battle-shocked. EFFECT: Your unit is no longer battle-shocked." },
   ],
   marks: [],
   units: [
@@ -885,50 +1228,160 @@ const TYR_DATA = {
   },
 
   detachments: [
+    // ── 3 DP Detachments ──
     {
       name: "Invasion Fleet", dpCost: 3, forceDisposition: "Take and Hold",
-      rule: "Synaptic Imperatives: At the start of your Command phase, select one Synaptic Imperative. Until the start of your next Command phase, that Imperative is active for all TYRANIDS units: Aggressive Surge (+3\" to Advance and Charge rolls), Defensive Adaptation (+1 to saving throws in the Fight phase), or Feeding Frenzy (+1 Attack for melee weapons when a charge is made).",
+      rule: "Hyper-adaptations: At the start of the first battle round, select one Hyper-adaptation to be active for TYRANIDS units from your army until the end of the battle: Swarming Instincts — each time a TYRANIDS model makes an attack targeting an INFANTRY or SWARM unit, that attack has [SUSTAINED HITS 1]. Hyper-aggression — each time a TYRANIDS model makes an attack targeting a MONSTER or VEHICLE unit, that attack has [LETHAL HITS]. Hive Predators — each time a TYRANIDS model makes an attack targeting a CHARACTER unit, on a Critical Hit that attack has [PRECISION].",
+    },
+    {
+      name: "Subterranean Assault", dpCost: 3, forceDisposition: "Disruption",
+      rule: "Surprise Assault: Each time a TYRANIDS model makes an attack, re-roll a Hit roll of 1. Each time a BURROWER unit is set up from Reserves, place a 40mm Tunnel Marker anywhere within 1\" of that unit and more than 3\" from all enemy units. In the Reinforcements step of your Movement phase, when setting up a unit from Reserves, you can set it up wholly within 9\" of a Tunnel Marker and more than 6\" from all enemy units. If an enemy model (excl. AIRCRAFT) ends any move within 3\" of a Tunnel Marker, that marker is removed. Keywords: MAWLOC and TRYGON units have BURROWER keyword. In Muster Armies step, select up to 2 TRYGON models to gain CHARACTER keyword.",
+    },
+    // ── 2 DP Detachments ──
+    {
+      name: "Assimilation Swarm", dpCost: 2, forceDisposition: "Priority Assets",
+      rule: "Feed the Swarm: In your Command phase, each HARVESTER unit from your army can Regenerate one friendly TYRANIDS unit within 6\" of it (once per phase per unit). Each time a unit regenerates, do one of: one model regains up to D3+1 lost wounds; OR one destroyed INFANTRY model (excl. CHARACTERS) is returned with full wounds (up to 3 models if ENDLESS MULTITUDE unit).",
     },
     {
       name: "Crusher Stampede", dpCost: 2, forceDisposition: "Purge the Foe",
-      rule: "Hyper-rage: Each time a TYRANIDS MONSTER unit from your army is selected to fight, if it is below its Starting Strength, add 1 to the Hit rolls for its melee weapons. If it is Below Half-strength, add 1 to the Wound rolls as well.",
+      rule: "Enraged Behemoths: Each time a TYRANIDS MONSTER model makes an attack, add 1 to the Hit roll if that model's unit is below Starting Strength, and add 1 to the Wound roll as well if Below Half-strength. While a TYRANIDS MONSTER unit (excl. Battle-shocked) is at Starting Strength, add 2 to the OC of models in that unit.",
+    },
+    {
+      name: "Synaptic Nexus", dpCost: 2, forceDisposition: "Disruption",
+      rule: "Synaptic Imperatives: At the start of the battle round, select one Synaptic Imperative (each once per battle) active for TYRANIDS units within Synapse Range until end of battle round: Synaptic Augmentation — while within Synapse Range, models have a 5+ invulnerable save. Surging Vitality — while within Synapse Range, add 1 to Advance and Charge rolls. Goaded to Slaughter — while within Synapse Range, each time a model makes a melee attack, add 1 to the Hit roll.",
     },
     {
       name: "Unending Swarm", dpCost: 2, forceDisposition: "Take and Hold",
-      rule: "Endless Multitudes: Once per turn, at the start of your Command phase, select one friendly TYRANIDS BATTLELINE unit from your army that has the Endless Multitudes ability. Return D6+2 destroyed models to that unit.",
-    },
-    {
-      name: "Assimilation Swarm", dpCost: 2, forceDisposition: "Take and Hold",
-      rule: "Feed the Swarm: At the start of your Command phase, each friendly HARVESTER unit can regenerate: return 1 destroyed non-CHARACTER INFANTRY model to a friendly TYRANIDS unit within 6\", or a MONSTER within 6\" regains D3+1 lost wounds.",
+      rule: "Insurmountable Odds: In your opponent's Shooting phase, when an enemy unit has shot, if a model from a friendly ENDLESS MULTITUDE unit was destroyed as a result of those attacks, that friendly unit can make a surge move of up to D6\".",
     },
     {
       name: "Vanguard Onslaught", dpCost: 2, forceDisposition: "Reconnaissance",
-      rule: "Seeded Broods: During deployment, up to 3 TYRANIDS INFANTRY units from your army can be set up anywhere on the battlefield more than 9\" from all enemy units (instead of in your deployment zone). In addition, the first time each VANGUARD unit attacks each turn, enemy units cannot use the Overwatch or Set to Defend reactions against it.",
+      rule: "Questing Tendrils + Vanguard Prime: TYRANIDS units with this ability are eligible to charge in a turn in which they Fell Back. VANGUARD INVADER units with this ability are also eligible to charge in a turn in which they Advanced. DEATHLEAPER loses the Hunter Organism rule and can be your WARLORD.",
+    },
+    // ── 1 DP Detachments ──
+    {
+      name: "Ambush Predators", dpCost: 1, forceDisposition: "Disruption",
+      rule: "Mindhunger: Friendly DEATHLEAPER/LICTOR/NEUROLICTOR units have Deep Strike. Friendly LICTOR/NEUROLICTOR units' attacks that target a CHARACTER unit can re-roll Hit rolls of 1.",
     },
     {
-      name: "Synaptic Nexus", dpCost: 2, forceDisposition: "Priority Assets",
-      rule: "Psychostatic Disruption: At the start of your opponent's Command phase, if one or more friendly SYNAPSE units are within 12\" of any enemy unit, subtract 1 from the Leadership characteristic of all enemy units until the end of the phase. Enemy units within 6\" of a SYNAPSE unit subtract 2 instead.",
+      name: "Talons of the Norn Queen", dpCost: 1, forceDisposition: "Take and Hold",
+      rule: "Higher Imperatives: Friendly NORN EMISSARY/NORN ASSIMILATOR units have the following ability — Protean Purpose: (Once per battle, per unit) In your Command phase, you can use this ability. If you do, this unit can make a new selection for its Singular Purpose ability, replacing the previous selection.",
+    },
+    {
+      name: "Warrior Bioform Onslaught", dpCost: 1, forceDisposition: "Take and Hold",
+      rule: "Leader-beasts: Friendly TYRANID WARRIORS WITH RANGED BIO-WEAPONS and TYRANID WARRIORS WITH MELEE BIO-WEAPONS units have the TYRANID WARRIORS and BATTLELINE keywords. TYRANID WARRIORS, TYRANID PRIME WITH LASH WHIP, and WINGED TYRANID PRIME models from your army have a 5+ invulnerable save.",
     },
   ],
 
   enhancements: [
-    { id: "tyr-e1", detachment: "Invasion Fleet", name: "Adaptive Biology", points: 25, description: "The bearer has the Feel No Pain 5+ ability. At the start of any turn, if the bearer has fewer than its starting wounds, it gains Feel No Pain 4+ instead." },
-    { id: "tyr-e2", detachment: "Invasion Fleet", name: "Perfectly Adapted", points: 15, description: "Once per turn, re-roll one Hit roll, Wound roll, Damage roll, Advance roll, Charge roll, or saving throw made for the bearer." },
-    { id: "tyr-e3", detachment: "Synaptic Nexus", name: "Synaptic Linchpin", points: 20, description: "While a friendly TYRANIDS unit is within 9\" of the bearer, that unit is within Synapse Range." },
-    { id: "tyr-e4", detachment: "Crusher Stampede", name: "Elevated Might", points: 30, description: "The bearer's unit can declare a charge even in a turn when it has Advanced." },
-    { id: "tyr-e5", detachment: "Vanguard Onslaught", name: "Ocular Adaptation", points: 20, description: "Add 1 to Hit rolls for models in the bearer's unit. (Winged Tyranid Prime only)" },
-    { id: "tyr-e6", detachment: "Synaptic Nexus", name: "Synaptic Tyrant", points: 10, description: "During the Declare Battle Formations step, the bearer (Neurotyrant only) can join a Tyranid Warriors unit, extending its Synapse Range and providing protection." },
+    // ── Invasion Fleet ──
+    { id: "tyr-e-if1", detachment: "Invasion Fleet", name: "Adaptive Biology", points: 25, description: "TYRANIDS model only. The bearer has the Feel No Pain 5+ ability. At the start of any turn, if the bearer has fewer than its starting number of wounds remaining, until the end of the battle, it has the Feel No Pain 4+ ability instead." },
+    { id: "tyr-e-if2", detachment: "Invasion Fleet", name: "Alien Cunning", points: 30, description: "TYRANIDS model only. After both players have deployed their armies, select up to three TYRANIDS units from your army and redeploy them. When doing so, you can set those units up in Strategic Reserves if you wish, regardless of how many units are already in Strategic Reserves." },
+    { id: "tyr-e-if3", detachment: "Invasion Fleet", name: "Perfectly Adapted", points: 15, description: "TYRANIDS model only. Once per turn, you can re-roll one Hit roll, one Wound roll, one Damage roll, one Advance roll, one Charge roll or one saving throw made for the bearer." },
+    { id: "tyr-e-if4", detachment: "Invasion Fleet", name: "Synaptic Linchpin", points: 20, description: "TYRANIDS model only. While a friendly TYRANIDS unit is within 9\" of the bearer, that unit is within Synapse Range of your army." },
+    // ── Subterranean Assault ──
+    { id: "tyr-e-sa1", detachment: "Subterranean Assault", name: "Synaptic Strategy", points: 15, description: "TYRANIDS model only. Once per battle, you can target the bearer's unit with the Rapid Ingress stratagem for 0 CP, and can do so even if you have already targeted a different unit with that Stratagem this phase." },
+    { id: "tyr-e-sa2", detachment: "Subterranean Assault", name: "Tremor Senses", points: 20, description: "TYRANIDS model only. After both players have deployed their armies, select up to three friendly TYRANIDS units from your army and redeploy them. When doing so, you can set those units up in Strategic Reserves, regardless of how many units are already in Strategic Reserves." },
+    { id: "tyr-e-sa3", detachment: "Subterranean Assault", name: "Trygon Prime", points: 20, description: "TRYGON model only. The bearer gains the SYNAPSE keyword. Improve the Strength and Weapon Skill characteristics of melee weapons equipped by the bearer by 1." },
+    { id: "tyr-e-sa4", detachment: "Subterranean Assault", name: "Vanguard Intellect", points: 15, description: "TYRANIDS model with the Deep Strike ability only. The bearer's unit can be set up using the Deep Strike ability in the Reinforcements step of your first, second or third Movement phase, regardless of any mission rules." },
+    // ── Assimilation Swarm ──
+    { id: "tyr-e-as1", detachment: "Assimilation Swarm", name: "Biophagic Flow (Aura)", points: 10, description: "TYRANIDS model only. While a friendly HARVESTER model is within 12\" of the bearer, when using the Feed the Swarm ability, that HARVESTER model can Regenerate one friendly TYRANIDS unit within 9\" of it, instead of one within 6\"." },
+    { id: "tyr-e-as2", detachment: "Assimilation Swarm", name: "Instinctive Defence", points: 15, description: "TYRANIDS model only. While the bearer is within 6\" of one or more friendly HARVESTER units, when you target this unit with the Heroic Intervention stratagem, that use is -1 CP. In addition, while the bearer is within 6\" of one or more friendly HARVESTER units, models in the bearer's unit have the Fights First ability." },
+    { id: "tyr-e-as3", detachment: "Assimilation Swarm", name: "Parasitic Biomorphology", points: 25, description: "TYRANIDS model only. Add 1 to the Strength characteristic of melee weapons equipped by models in the bearer's unit. The first time the bearer's unit destroys an enemy unit in the Fight phase while the bearer is within 6\" of one or more friendly HARVESTER units, until the end of the battle, add 1 to the Attacks characteristic of melee weapons equipped by models in the bearer's unit." },
+    { id: "tyr-e-as4", detachment: "Assimilation Swarm", name: "Regenerating Monstrosity", points: 20, description: "TYRANIDS model only (excluding MONSTERS). The bearer's unit can be regenerated up to twice per phase, instead of once." },
+    // ── Crusher Stampede ──
+    { id: "tyr-e-cs1", detachment: "Crusher Stampede", name: "Enraged Reserves", points: 20, description: "TYRANIDS MONSTER model only. If the bearer is destroyed by a melee attack and has not fought this phase, roll one D6: on a 3+, do not remove it from play. It can fight after the attacking model's unit has finished making its attacks, and is then removed from play." },
+    { id: "tyr-e-cs2", detachment: "Crusher Stampede", name: "Monstrous Nemesis", points: 25, description: "TYRANIDS MONSTER model only. Each time the bearer makes a melee attack that targets a MONSTER or VEHICLE unit, add 1 to the Wound roll." },
+    { id: "tyr-e-cs3", detachment: "Crusher Stampede", name: "Null Nodules", points: 10, description: "TYRANIDS MONSTER model only. Once per battle, when a Psychic Attack is allocated to the bearer, until the end of the phase the bearer has the Feel No Pain 5+ ability against Psychic Attacks." },
+    { id: "tyr-e-cs4", detachment: "Crusher Stampede", name: "Ominous Presence", points: 15, description: "TYRANIDS MONSTER model only. Add 3 to the bearer's Objective Control characteristic." },
+    // ── Synaptic Nexus ──
+    { id: "tyr-e-sn1", detachment: "Synaptic Nexus", name: "Power of the Hive Mind", points: 10, description: "TYRANIDS PSYKER model only. Improve the Strength and Armour Penetration characteristics of psychic weapons equipped by the bearer by 1." },
+    { id: "tyr-e-sn2", detachment: "Synaptic Nexus", name: "Psychostatic Disruption", points: 30, description: "TYRANIDS SYNAPSE model only. Enemy units arriving from Reserves cannot be set up within 12\" of the bearer. Once per battle during battle rounds 1 or 2, when your opponent declares a unit arriving from Strategic Reserves, roll D6: on a 4+, that unit cannot arrive this turn." },
+    { id: "tyr-e-sn3", detachment: "Synaptic Nexus", name: "Synaptic Control", points: 20, description: "TYRANIDS SYNAPSE model only. Each time an attack is allocated to the bearer, subtract 1 from the Damage characteristic of that attack." },
+    { id: "tyr-e-sn4", detachment: "Synaptic Nexus", name: "The Dirgeheart of Kharis (Aura)", points: 15, description: "TYRANIDS SYNAPSE model only. While an enemy unit is within 9\" of the bearer, worsen that unit's Leadership characteristic by 1." },
+    // ── Unending Swarm ──
+    { id: "tyr-e-us1", detachment: "Unending Swarm", name: "Adrenalised Onslaught", points: 15, description: "TYRANIDS model only. Each time the bearer's unit Piles In or Consolidates, models in this unit can move an additional 3\"." },
+    { id: "tyr-e-us2", detachment: "Unending Swarm", name: "Naturalised Camouflage", points: 30, description: "TYRANIDS model only. At the start of the first battle round, select up to three friendly ENDLESS MULTITUDE units within 9\" of the bearer. Until the end of the battle round, each time a ranged attack targets one of those units, models in that unit have the Benefit of Cover against that attack." },
+    { id: "tyr-e-us3", detachment: "Unending Swarm", name: "Piercing Talons", points: 25, description: "TYRANIDS model only. Each time a model in the bearer's unit makes an attack, on a Critical Wound, improve the Armour Penetration characteristic of that attack by 1." },
+    { id: "tyr-e-us4", detachment: "Unending Swarm", name: "Relentless Hunger", points: 20, description: "TYRANIDS model only. Add 2\" to the Move characteristic of models in the bearer's unit." },
+    // ── Vanguard Onslaught ──
+    { id: "tyr-e-vo1", detachment: "Vanguard Onslaught", name: "Chameleonic", points: 15, description: "VANGUARD INVADER model only. This unit has the Stealth ability." },
+    { id: "tyr-e-vo2", detachment: "Vanguard Onslaught", name: "Hunting Grounds", points: 30, description: "TYRANIDS model only. While the bearer is on the battlefield, each time your opponent sets up a Reserves unit on the battlefield, roll one D6: on a 2+, that unit must take a Battle-shock test." },
+    { id: "tyr-e-vo3", detachment: "Vanguard Onslaught", name: "Neuronode", points: 20, description: "TYRANIDS model only. After both players have deployed their armies, you can select up to three VANGUARD INVADER units from your army and redeploy all of those units. When doing so, any of those units can be placed into Strategic Reserves, regardless of how many units are already in Strategic Reserves." },
+    { id: "tyr-e-vo4", detachment: "Vanguard Onslaught", name: "Stalker", points: 10, description: "VANGUARD INVADER model only. At the start of the battle, select one enemy unit. Each time the bearer makes an attack that targets that enemy unit, add 1 to the Hit roll and add 1 to the Wound roll." },
+    // ── Ambush Predators ──
+    { id: "tyr-e-ap1", detachment: "Ambush Predators", name: "Cryptophotaic Camouflage", points: 15, description: "VON RYAN'S LEAPERS unit only. This unit has -3\" detection range." },
+    { id: "tyr-e-ap2", detachment: "Ambush Predators", name: "Encircling Horrors", points: 20, description: "NEUROLICTOR/LICTOR/VON RYAN'S LEAPERS unit only. In your opponent's Movement phase, when an enemy unit ends a move within 8\" of this unit, this unit can make a Normal move of up to D3+3\"." },
+    // ── Talons of the Norn Queen ──
+    { id: "tyr-e-tnq1", detachment: "Talons of the Norn Queen", name: "Destabilising Predation", points: 20, description: "NORN EMISSARY unit only. This unit's ranged attacks have [ANTI-CHARACTER 2+]." },
+    { id: "tyr-e-tnq2", detachment: "Talons of the Norn Queen", name: "Synaptoprescience", points: 25, description: "NORN ASSIMILATOR unit only. This unit has a 4+ invulnerable save." },
+    // ── Warrior Bioform Onslaught ──
+    { id: "tyr-e-wbo1", detachment: "Warrior Bioform Onslaught", name: "Elevated Might", points: 30, description: "WINGED TYRANID PRIME or TYRANID PRIME WITH LASH WHIP model only. This model's melee attacks can re-roll Wound rolls and have +1 AP." },
+    { id: "tyr-e-wbo2", detachment: "Warrior Bioform Onslaught", name: "Ocular Adaptation", points: 20, description: "WINGED TYRANID PRIME or TYRANID PRIME WITH LASH WHIP model only. This unit's melee attacks have +1 to Hit rolls." },
   ],
 
   stratagems: [
-    { id: "tyr-s1", detachment: "Vanguard Onslaught", name: "Lurk and Strike", cost: "1 CP", phase: "Movement Phase", description: "Use when a TYRANIDS INFANTRY unit is chosen to move. Remove that unit from the battlefield and place it into Strategic Reserves. It returns in the Reinforcements step of any subsequent Movement phase using the Deep Strike ability." },
-    { id: "tyr-s2", detachment: "Invasion Fleet", name: "Voracious Appetite", cost: "1 CP", phase: "Fight Phase", description: "Use when a TYRANIDS unit is chosen to fight. Until the end of the phase, each time a model in that unit makes a melee attack, an unmodified Hit roll of 6 scores 1 additional hit." },
-    { id: "tyr-s3", detachment: "Vanguard Onslaught", name: "Aggressive Surge", cost: "1 CP", phase: "Movement Phase", description: "Use when a TYRANIDS unit is chosen to Advance. Add 3\" to the result of the Advance roll for that unit. Until the end of the turn, the unit can still shoot (with Assault weapons) and charge." },
-    { id: "tyr-s4", detachment: "Synaptic Nexus", name: "Synaptic Feedback", cost: "2 CP", phase: "Any Phase", description: "Use when an enemy unit targets a SYNAPSE unit from your army. Until the end of the phase, each time that enemy unit makes an attack that targets your unit, on an unmodified Hit roll of 1, the attacking model's unit suffers 1 mortal wound." },
-    { id: "tyr-s5", detachment: "Crusher Stampede", name: "Bioweapon Barrage", cost: "1 CP", phase: "Shooting Phase", description: "Use when a TYRANIDS unit is chosen to shoot. Until the end of the phase, ranged weapons equipped by models in that unit gain the Devastating Wounds ability." },
-    { id: "tyr-s6", detachment: "Crusher Stampede", name: "Rampaging Monstrosities", cost: "1 CP", phase: "Fight Phase", description: "Use when a TYRANIDS MONSTER unit is chosen to fight. Until the end of the phase, re-roll Hit rolls for that unit's melee weapons." },
-    { id: "tyr-s7", detachment: "Invasion Fleet", name: "Instinctive Behaviour", cost: "1 CP", phase: "Any Phase", description: "Use when a TYRANIDS unit that is not within Synapse Range would fail a Battle-shock test. That unit does not fail the Battle-shock test." },
-    { id: "tyr-s8", detachment: "Unending Swarm", name: "Corrosive Viscera", cost: "1 CP", phase: "Any Phase", description: "Use when a TYRANIDS MONSTER unit is destroyed. Roll D6 for each unit within 6\": on a 2+, that unit suffers D3 mortal wounds as biomatter detonates." },
+    // ── Invasion Fleet ──
+    { id: "tyr-s-if1", detachment: "Invasion Fleet", name: "Rapid Regeneration", cost: "1 CP", phase: "Shooting or Fight Phase (Battle Tactic)", description: "WHEN: Your opponent's Shooting phase or the Fight phase, just after an enemy unit has selected its targets. TARGET: One TYRANIDS unit from your army that was selected as the target. EFFECT: Until the end of the phase, models in your unit have the Feel No Pain 6+ ability. If your unit is within Synapse Range of your army, models in your unit have the Feel No Pain 5+ ability instead." },
+    { id: "tyr-s-if2", detachment: "Invasion Fleet", name: "Adrenal Surge", cost: "2 CP", phase: "Fight Phase (Battle Tactic)", description: "WHEN: Fight phase. TARGET: Up to two TYRANIDS units within Synapse Range that are eligible to fight, or one other TYRANIDS unit eligible to fight. EFFECT: Until the end of the phase, each time a model in any of those selected units makes an attack, an unmodified Hit roll of 5+ scores a Critical Hit." },
+    { id: "tyr-s-if3", detachment: "Invasion Fleet", name: "Death Frenzy", cost: "1 CP", phase: "Fight Phase (Strategic Ploy)", description: "WHEN: Fight phase, just after an enemy unit has selected its targets. TARGET: One TYRANIDS unit from your army that was selected as the target. EFFECT: Until the end of the phase, each time a model in your unit is destroyed, if that model has not fought this phase, roll one D6: on a 4+, do not remove it from play. The destroyed model can fight after the attacking model's unit has finished making its attacks, and is then removed from play." },
+    { id: "tyr-s-if4", detachment: "Invasion Fleet", name: "Overrun", cost: "1 CP", phase: "Fight Phase (Strategic Ploy)", description: "WHEN: Fight phase, just before a TYRANIDS unit from your army Consolidates. TARGET: That TYRANIDS unit. EFFECT: Until the end of the phase, each time your unit Consolidates, models can move an additional 3\" as long as your unit can end that move within Engagement Range of one or more enemy units. If your unit is within Synapse Range and not within Engagement Range of any enemy units, instead of Consolidating, it can make a Normal move of up to 6\"." },
+    { id: "tyr-s-if5", detachment: "Invasion Fleet", name: "Predatory Imperative", cost: "1 CP", phase: "Command Phase (Strategic Ploy)", description: "WHEN: Your Command phase. TARGET: Up to two TYRANIDS units within Synapse Range, or one other TYRANIDS unit. EFFECT: Select one Hyper-adaptation (not the one chosen at start of battle). Until the start of your next Command phase, that Hyper-adaptation is also active for those selected units." },
+    { id: "tyr-s-if6", detachment: "Invasion Fleet", name: "Endless Swarm", cost: "1 CP", phase: "Command Phase (Strategic Ploy)", description: "WHEN: Your Command phase. TARGET: Up to two ENDLESS MULTITUDE units within Synapse Range, or one other ENDLESS MULTITUDE unit. EFFECT: You can return up to D3+3 destroyed models to each of those selected units." },
+    // ── Subterranean Assault ──
+    { id: "tyr-s-sa1", detachment: "Subterranean Assault", name: "Adaptive Optimisation", cost: "1 CP", phase: "Command Phase (Wargear)", description: "WHEN: Command phase. TARGET: One MAWLOC or TRYGON unit from your army. EFFECT: Until the start of your next Command phase, your unit has the SYNAPSE keyword." },
+    { id: "tyr-s-sa2", detachment: "Subterranean Assault", name: "Replenishing Swarms", cost: "1 CP", phase: "Movement Phase (Wargear)", description: "WHEN: Your Movement phase. TARGET: One TYRANIDS unit from your army wholly within 9\" of one or more Tunnel Markers you placed. EFFECT: One model in your unit regains up to D3+1 lost wounds, or you can return up to D3+1 destroyed models with a Wounds characteristic of 1 with their full wounds remaining." },
+    { id: "tyr-s-sa3", detachment: "Subterranean Assault", name: "Enfilading Emergence", cost: "1 CP", phase: "Movement Phase (Strategic Ploy)", description: "WHEN: End of your Movement phase. TARGET: One TYRANIDS unit from your army that was set up as Reinforcements this turn. EFFECT: Until the end of your next Fight phase, weapons equipped by models in your unit have the [SUSTAINED HITS 1] and [IGNORES COVER] abilities." },
+    { id: "tyr-s-sa4", detachment: "Subterranean Assault", name: "Tunnel Network", cost: "1 CP", phase: "Movement Phase (Strategic Ploy)", description: "WHEN: End of your Movement phase. TARGET: One TYRANIDS unit from your army wholly within 9\" of one or more of your Tunnel Markers and not within Engagement Range of enemy units. EFFECT: Remove your unit from the battlefield and set it up again, wholly within 9\" of another Tunnel Marker you placed, and more than 6\" horizontally away from all enemy units." },
+    { id: "tyr-s-sa5", detachment: "Subterranean Assault", name: "Swarming Assault", cost: "1 CP", phase: "Charge Phase (Strategic Ploy)", description: "WHEN: Your Charge phase. TARGET: One TYRANIDS MONSTER unit from your army that was set up as Reinforcements this turn. EFFECT: Until the end of the phase, friendly TYRANIDS units within 6\" of your unit can re-roll Charge rolls." },
+    { id: "tyr-s-sa6", detachment: "Subterranean Assault", name: "Retreat Below", cost: "1 CP", phase: "Fight Phase (Strategic Ploy)", description: "WHEN: End of your opponent's Fight phase. TARGET: One TYRANIDS unit or up to two BURROWER units from your army that are not within Engagement Range of one or more enemy units. EFFECT: Remove those units from the battlefield and place them into Strategic Reserves." },
+    // ── Assimilation Swarm ──
+    { id: "tyr-s-as1", detachment: "Assimilation Swarm", name: "Broodguard Impulse", cost: "1 CP", phase: "Any Phase (Epic Deed)", description: "WHEN: Any phase, just after a HARVESTER unit from your army is destroyed. TARGET: That destroyed HARVESTER unit. EFFECT: Until the end of the battle, each time a friendly TYRANIDS model makes an attack that targets the enemy unit that just destroyed your HARVESTER unit, add 1 to the Wound roll." },
+    { id: "tyr-s-as2", detachment: "Assimilation Swarm", name: "Reclaim Biomass", cost: "1 CP", phase: "Any Phase (Strategic Ploy)", description: "WHEN: Any phase, when a TYRANIDS unit from your army is destroyed, before the last model is removed from play. TARGET: One HARVESTER unit from your army within 6\" of that destroyed unit. EFFECT: Regenerate one friendly TYRANIDS unit within 6\" of your HARVESTER unit." },
+    { id: "tyr-s-as3", detachment: "Assimilation Swarm", name: "Tyrannoformed", cost: "1 CP", phase: "Command Phase (Strategic Ploy)", description: "WHEN: Command phase. TARGET: One HARVESTER unit from your army within range of an objective marker you control. EFFECT: That objective marker remains under your control until your opponent's Level of Control over that objective marker is greater than yours at the end of a phase." },
+    { id: "tyr-s-as4", detachment: "Assimilation Swarm", name: "Ablative Carapace", cost: "2 CP", phase: "Shooting or Fight Phase (Epic Deed)", description: "WHEN: Your opponent's Shooting phase or the Fight phase, just after an enemy unit has selected its targets. TARGET: One HARVESTER unit from your army that was selected as the target. EFFECT: Until the end of the phase, models in your unit have the Feel No Pain 5+ ability. If your unit is within range of an objective marker you control, models in your unit have the Feel No Pain 4+ ability instead." },
+    { id: "tyr-s-as5", detachment: "Assimilation Swarm", name: "Secure Biomass", cost: "1 CP", phase: "Fight Phase (Strategic Ploy)", description: "WHEN: Fight phase. TARGET: One TYRANIDS unit from your army that has not been selected to fight this phase. EFFECT: Until the end of the phase, melee weapons equipped by models in your unit have the [LETHAL HITS] ability. If your unit is a HARVESTER unit, each time a model makes a melee attack, a successful unmodified Hit roll of 5+ scores a Critical Hit as well." },
+    { id: "tyr-s-as6", detachment: "Assimilation Swarm", name: "Rapacious Hunger", cost: "1 CP", phase: "Fight Phase (Battle Tactic)", description: "WHEN: Your Fight phase. TARGET: One TYRANIDS unit from your army that just destroyed an enemy unit. EFFECT: Your unit immediately Regenerates. When doing so, if your unit is a HARVESTER unit and you choose for one model to regain up to D3 lost wounds, that model regains up to 3 lost wounds instead." },
+    // ── Crusher Stampede ──
+    { id: "tyr-s-cs1", detachment: "Crusher Stampede", name: "Corrosive Viscera", cost: "1 CP", phase: "Shooting or Fight Phase (Strategic Ploy)", description: "WHEN: Your opponent's Shooting phase or the Fight phase, just after a TYRANIDS MONSTER model from your army with the Deadly Demise ability that cannot Fly is destroyed. TARGET: That TYRANIDS MONSTER model. EFFECT: Do not roll D6 to determine whether mortal wounds are inflicted by your model's Deadly Demise ability — mortal wounds are automatically inflicted." },
+    { id: "tyr-s-cs2", detachment: "Crusher Stampede", name: "Rampaging Monstrosities", cost: "1 CP", phase: "Fight Phase (Battle Tactic)", description: "WHEN: Fight phase. TARGET: One TYRANIDS MONSTER unit from your army that has not been selected to fight this phase. EFFECT: Until the end of the phase, each time a model in your unit makes an attack, you can re-roll the Hit roll." },
+    { id: "tyr-s-cs3", detachment: "Crusher Stampede", name: "Savage Roar", cost: "1 CP", phase: "Fight Phase (Battle Tactic)", description: "WHEN: Fight phase, just after an enemy unit has selected its targets. TARGET: One TYRANIDS MONSTER unit from your army that was selected as the target. EFFECT: That enemy unit must take a Battle-shock test and, until the end of the phase, each time a model in that enemy unit makes an attack targeting your unit, subtract 1 from the Hit roll. If the Battle-shock test was failed, subtract 1 from the Wound roll as well." },
+    { id: "tyr-s-cs4", detachment: "Crusher Stampede", name: "Untrammelled Ferocity", cost: "1 CP", phase: "Movement Phase (Strategic Ploy)", description: "WHEN: Your Movement phase. TARGET: One TYRANIDS MONSTER unit from your army that has not been selected to move this phase. EFFECT: Until the end of the phase, each time a model in your unit makes a Normal, Advance or Fall Back move, it can move through models (excluding TITANIC models) and terrain features 4\" or less in height, moving within but not ending in Engagement Range of enemy models. Can also move through terrain more than 4\" high but roll D6 after — on a 1, your unit is Battle-shocked." },
+    { id: "tyr-s-cs5", detachment: "Crusher Stampede", name: "Swarm-guided Salvoes", cost: "1 CP", phase: "Shooting Phase (Battle Tactic)", description: "WHEN: Your Shooting phase. TARGET: One TYRANIDS MONSTER unit from your army that has not been selected to shoot this phase. EFFECT: Until the end of the phase, ranged weapons have [IGNORES COVER] and each time a model makes an attack, you can ignore any or all modifiers to BS and Hit rolls." },
+    { id: "tyr-s-cs6", detachment: "Crusher Stampede", name: "Massive Impact", cost: "1 CP", phase: "Charge Phase (Epic Deed)", description: "WHEN: Your Charge phase, just after a TYRANIDS MONSTER model from your army ends a Charge move. TARGET: That TYRANIDS MONSTER model. EFFECT: Select one enemy unit within Engagement Range of your model and roll six D6: for each 4+, that enemy unit suffers 1 mortal wound." },
+    // ── Synaptic Nexus ──
+    { id: "tyr-s-sn1", detachment: "Synaptic Nexus", name: "The Smothering Shadow", cost: "1 CP", phase: "Any Phase (Strategic Ploy)", description: "WHEN: Any phase, just after an enemy unit fails a Battle-shock test. TARGET: One SYNAPSE unit from your army within 12\" of that enemy unit. EFFECT: Roll six D6: for each 3+, that enemy unit suffers 1 mortal wound." },
+    { id: "tyr-s-sn2", detachment: "Synaptic Nexus", name: "Synaptic Channelling", cost: "1 CP", phase: "Command Phase (Battle Tactic)", description: "WHEN: Command phase. TARGET: One SYNAPSE unit from your army. EFFECT: Until the end of the turn, while a friendly TYRANIDS unit is within 9\" of the selected unit, that unit is within Synapse Range of your army." },
+    { id: "tyr-s-sn3", detachment: "Synaptic Nexus", name: "Irresistible Will", cost: "1 CP", phase: "Shooting or Fight Phase (Battle Tactic)", description: "WHEN: Your Shooting phase or the Fight phase. TARGET: One SYNAPSE unit from your army that has not been selected to shoot or fight this phase, and one enemy unit within 24\" of and visible to that SYNAPSE unit. EFFECT: Until the end of the phase, each time a friendly TYRANIDS model makes an attack targeting that enemy unit, if the attacking model's unit is within 6\" of your SYNAPSE unit, re-roll a Hit roll of 1 and re-roll a Wound roll of 1." },
+    { id: "tyr-s-sn4", detachment: "Synaptic Nexus", name: "Reinforced Hive Node", cost: "1 CP", phase: "Shooting or Fight Phase (Battle Tactic)", description: "WHEN: Your opponent's Shooting phase or the Fight phase, just after an enemy unit has selected its targets. TARGET: One SYNAPSE unit from your army that was selected as the target. EFFECT: Until the attacking unit has finished making its attacks, each time an attack targets your unit, worsen the Armour Penetration characteristic of that attack by 1." },
+    { id: "tyr-s-sn5", detachment: "Synaptic Nexus", name: "Imperative Dominance", cost: "1 CP", phase: "Command Phase (Strategic Ploy)", description: "WHEN: Your Command phase. TARGET: One TYRANIDS unit from your army within Synapse Range. EFFECT: Select one Synaptic Imperative, even if already selected this battle. Until the start of your next Command phase, that Synaptic Imperative is active for your unit instead of any other Synaptic Imperative active for your army." },
+    { id: "tyr-s-sn6", detachment: "Synaptic Nexus", name: "Override Instincts", cost: "1 CP", phase: "Movement Phase (Strategic Ploy)", description: "WHEN: Your Movement phase. TARGET: One TYRANIDS unit from your army within Synapse Range that made a Fall Back move this phase. EFFECT: Your unit is eligible to shoot and declare a charge this turn." },
+    // ── Unending Swarm ──
+    { id: "tyr-s-us1", detachment: "Unending Swarm", name: "Synaptic Goading", cost: "1 CP", phase: "Any Phase (Strategic Ploy)", description: "WHEN: Any phase, just before an ENDLESS MULTITUDE unit within Synapse Range makes a Surge move. TARGET: That ENDLESS MULTITUDE unit. EFFECT: When making that Surge move, you can re-roll the D6 for distance, and your unit can end that move as close as possible to the closest objective marker instead of the closest enemy unit." },
+    { id: "tyr-s-us2", detachment: "Unending Swarm", name: "Unending Waves", cost: "2 CP", phase: "Any Phase (Strategic Ploy, once per battle)", description: "WHEN: Any phase, just after an ENDLESS MULTITUDE unit from your army is destroyed. TARGET: That destroyed unit. EFFECT: Add a new identical unit to your army in Strategic Reserves at Starting Strength. Attached CHARACTER units are not returned. Can only be used once per battle." },
+    { id: "tyr-s-us3", detachment: "Unending Swarm", name: "Teeming Masses", cost: "1 CP", phase: "Shooting or Fight Phase (Battle Tactic)", description: "WHEN: Your opponent's Shooting phase or the Fight phase, just after an enemy unit has selected its targets. TARGET: One ENDLESS MULTITUDE unit from your army that was selected as the target. EFFECT: Until the end of the phase, each time an attack targets your unit, subtract 1 from the Hit roll." },
+    { id: "tyr-s-us4", detachment: "Unending Swarm", name: "Swarming Masses", cost: "1 CP", phase: "Shooting or Fight Phase (Battle Tactic)", description: "WHEN: Your Shooting phase or the Fight phase. TARGET: One ENDLESS MULTITUDE unit from your army that has not been selected to shoot or fight this phase. EFFECT: Until the end of the phase, weapons have [SUSTAINED HITS 1]. If your unit contains 15 or more models, each time a model makes an attack, an unmodified Hit roll of 5+ also scores a Critical Hit." },
+    { id: "tyr-s-us5", detachment: "Unending Swarm", name: "Bounding Advance", cost: "1 CP", phase: "Movement Phase (Battle Tactic)", description: "WHEN: Your Movement phase. TARGET: One ENDLESS MULTITUDE unit from your army. EFFECT: Until the end of the phase, each time your unit Advances, do not make an Advance roll — instead add 6\" to the Move characteristic of models in your unit until end of phase." },
+    { id: "tyr-s-us6", detachment: "Unending Swarm", name: "Preservation Imperative", cost: "1 CP", phase: "Shooting Phase (Strategic Ploy)", description: "WHEN: Your opponent's Shooting phase, just after an enemy unit has selected its targets. TARGET: One ENDLESS MULTITUDE unit from your army that was selected as the target. EFFECT: Until the end of the phase, your unit is treated as containing fewer than five models for the purposes of the [BLAST] ability." },
+    // ── Vanguard Onslaught ──
+    { id: "tyr-s-vo1", detachment: "Vanguard Onslaught", name: "Surprise Assault", cost: "1 CP", phase: "Shooting or Fight Phase (Battle Tactic)", description: "WHEN: Your Shooting phase or the Fight phase, just after a VANGUARD INVADER unit from your army has selected its targets. TARGET: That VANGUARD INVADER unit. EFFECT: Select one enemy unit targeted by your attacks — that enemy unit must take a Battle-shock test. Until end of phase, each time a model in your unit makes an attack targeting that enemy unit, add 1 to the Hit roll. If the Battle-shock test was failed, add 1 to the Wound roll as well." },
+    { id: "tyr-s-vo2", detachment: "Vanguard Onslaught", name: "Assassin Beasts", cost: "1 CP", phase: "Fight Phase (Battle Tactic)", description: "WHEN: Fight phase. TARGET: One VANGUARD INVADER INFANTRY unit from your army that has not been selected to fight this phase. EFFECT: Until the end of the phase, melee weapons equipped by models in your unit have the [PRECISION] ability." },
+    { id: "tyr-s-vo3", detachment: "Vanguard Onslaught", name: "Seeded Broods", cost: "1 CP", phase: "Movement Phase (Strategic Ploy)", description: "WHEN: Your Movement phase. TARGET: One TYRANIDS unit in Reserves, or up to two VANGUARD INVADER units in Reserves. EFFECT: Until the end of the phase, for the purposes of setting up those selected units on the battlefield, treat the current battle round number as being one higher than it actually is." },
+    { id: "tyr-s-vo4", detachment: "Vanguard Onslaught", name: "Hypersensory Scillia", cost: "2 CP", phase: "Movement Phase (Strategic Ploy)", description: "WHEN: Your opponent's Movement phase, just after an enemy unit ends a Normal, Advance or Fall Back move. TARGET: Up to two VANGUARD INVADER units within 8\" of that enemy unit (or one other TYRANIDS INFANTRY unit within 8\"), not within Engagement Range of enemy units. EFFECT: Those selected units can each make a Normal move of up to 6\"." },
+    { id: "tyr-s-vo5", detachment: "Vanguard Onslaught", name: "Unseen Lurkers", cost: "1 CP", phase: "Shooting Phase (Strategic Ploy)", description: "WHEN: Your opponent's Shooting phase, just after an enemy unit has selected its targets. TARGET: One VANGUARD INVADER unit from your army that was selected as the target. EFFECT: Until the end of the phase, your unit can only be targeted by ranged attacks if the attacker is within 18\" (or within 6\" if your unit has Lone Operative). Your opponent can select new targets for their attacks." },
+    { id: "tyr-s-vo6", detachment: "Vanguard Onslaught", name: "Invisible Hunter", cost: "1 CP", phase: "Fight Phase (Strategic Ploy)", description: "WHEN: End of your opponent's Fight phase. TARGET: Up to two VANGUARD INVADER units (or one TYRANIDS INFANTRY unit) more than 3\" from all enemy units. EFFECT: Remove those units from the battlefield and place them into Strategic Reserves." },
+    // ── Ambush Predators ──
+    { id: "tyr-s-ap1", detachment: "Ambush Predators", name: "Hypersensory Adaptations", cost: "1 CP", phase: "Shooting Phase", description: "WHEN: Start of your Shooting phase. TARGET: One friendly DEATHLEAPER/LICTOR/NEUROLICTOR/VON RYAN'S LEAPERS unit. EFFECT: Select one visible enemy unit within 12\" of your unit. That enemy unit has +6\" detection range." },
+    { id: "tyr-s-ap2", detachment: "Ambush Predators", name: "Counterpredation", cost: "1 CP", phase: "Fight Phase", description: "WHEN: Fight phase, when a friendly DEATHLEAPER/LICTOR/NEUROLICTOR/VON RYAN'S LEAPERS unit is selected to fight. TARGET: That unit. EFFECT: Your unit's attacks that target a hidden unit have +1 Strength and +1 AP." },
+    { id: "tyr-s-ap3", detachment: "Ambush Predators", name: "Scanner Gheist", cost: "1 CP", phase: "Fight Phase", description: "WHEN: End of your opponent's Fight phase. TARGET: One friendly unengaged DEATHLEAPER/LICTOR/NEUROLICTOR unit. EFFECT: Place your unit in Strategic Reserves." },
+    // ── Talons of the Norn Queen ──
+    { id: "tyr-s-tnq1", detachment: "Talons of the Norn Queen", name: "Lesser Prey", cost: "1 CP", phase: "Fight Phase", description: "WHEN: Fight phase, when a friendly NORN ASSIMILATOR/NORN EMISSARY unit is selected to fight. TARGET: That unit. EFFECT: Your unit's melee attacks have +2 Strength until end of phase." },
+    { id: "tyr-s-tnq2", detachment: "Talons of the Norn Queen", name: "Catalytic Biofortification", cost: "1 CP", phase: "Any Phase", description: "WHEN: Any phase, when a friendly NORN ASSIMILATOR unit suffers a mortal wound. TARGET: That NORN ASSIMILATOR unit. EFFECT: Your unit has Feel No Pain 4+ against mortal wounds until end of phase." },
+    { id: "tyr-s-tnq3", detachment: "Talons of the Norn Queen", name: "Tanglestrike Rounds", cost: "1 CP", phase: "Shooting Phase", description: "WHEN: Your Shooting phase, when a friendly NORN ASSIMILATOR unit has shot. TARGET: That NORN ASSIMILATOR unit. EFFECT: Select one enemy unit hit by those attacks. That enemy unit is tethered until the start of your next Command phase (-2\" Move while tethered)." },
+    // ── Warrior Bioform Onslaught ──
+    { id: "tyr-s-wbo1", detachment: "Warrior Bioform Onslaught", name: "Alien Physiology", cost: "1 CP", phase: "Shooting or Fight Phase", description: "WHEN: Your opponent's Shooting phase or the Fight phase, when an enemy unit targets a friendly TYRANID WARRIORS unit. TARGET: That TYRANID WARRIORS unit. EFFECT: Attacks targeting your unit with Strength greater than your unit's Toughness have -1 to Wound rolls." },
+    { id: "tyr-s-wbo2", detachment: "Warrior Bioform Onslaught", name: "Parasitic Payload", cost: "1 CP", phase: "Shooting Phase", description: "WHEN: Your Shooting phase, when a friendly TYRANID WARRIORS unit is selected to shoot. TARGET: That TYRANID WARRIORS unit. EFFECT: Your unit's ranged attacks have [IGNORES COVER] until end of phase." },
+    { id: "tyr-s-wbo3", detachment: "Warrior Bioform Onslaught", name: "Synaptic Micronodes", cost: "1 CP", phase: "Movement Phase", description: "WHEN: End of your Movement phase. TARGET: One friendly TYRANID WARRIORS unit. EFFECT: Select one objective marker your unit is controlling. That objective marker is secured." },
   ],
 
   // Tyranids do not use Marks of Chaos
@@ -1847,16 +2300,49 @@ const TYR_DATA = {
 // ============================================================
 // FACTION REGISTRY
 // ============================================================
-// Maps faction ID strings to their full data objects.
-// Add new factions here to make them available throughout the app.
+// Maps faction ID strings → full data objects.
+// This is the single source of truth for which factions exist.
+//
+// To add a new faction:
+//   1. Define a new data object (e.g. DRUKHARI_DATA = { id: "drk", ... })
+//   2. Add it here: { ..., drk: DRUKHARI_DATA }
+//   3. Add faction honours to BATTLE_HONOURS, agendas to CRUSADE_AGENDAS,
+//      and wire it into CrusadeUnitCard's availableHonourCategories.
+//
+// The faction ID string (e.g. "csm") is used:
+//   - As the key in this registry
+//   - In factionId state throughout ArmyBuilder and CrusadeSection
+//   - In factionRestriction fields on agendas and honour categories
+//   - As the CSS accent/color source via FACTIONS[factionId].color
 const FACTIONS = { csm: CSM_DATA, we: WE_DATA, sm: SM_DATA, tyr: TYR_DATA };
 
 // ============================================================
 // HELPER FUNCTIONS
 // ============================================================
+// getExcludedWeapons(selectedWeapons, factionData)
+//   Given the current weapon selections for a unit, returns the
+//   set of weapon IDs that should be greyed out (because a
+//   mutually exclusive weapon is already selected).
+//
+// useIsMobile(breakpoint)
+//   Custom hook — returns true when the viewport is narrower than
+//   the breakpoint (default 640px). Used to switch between
+//   mobile and desktop layouts throughout the app.
+//
+// buildArmySnapshot(factionId, armyName, pointsLimit, units)
+//   Serialises the current army builder state into a plain JS
+//   object for storage. Strips React state and DOM refs.
+//
+// hydrateArmySnapshot(snapshot)
+//   Reverses buildArmySnapshot — re-links stored unit data back
+//   to the live faction data objects and recomputes points totals.
+//   Called when loading a saved list.
 
 // Computes the set of weapon IDs that are locked due to exclusivity rules.
 // Used by WeaponRow to gray out mutually incompatible options in real-time.
+// Returns a Set of weapon IDs that are currently locked out.
+// A weapon is locked out when another weapon in its `exclusive` array
+// is already selected. This prevents illegal weapon combinations.
 function getExcludedWeapons(selectedWeapons, factionData) {
   const excluded = new Set();
   const allWeapons = factionData.units.flatMap((u) => [
@@ -1872,6 +2358,9 @@ function getExcludedWeapons(selectedWeapons, factionData) {
 
 // Returns true when the viewport width is below the given pixel threshold.
 // Re-evaluates on window resize so all consumers stay in sync.
+// Custom hook that returns true when viewport width < breakpoint.
+// Attaches a resize listener and cleans it up on unmount.
+// Used throughout the app to switch between mobile and desktop layouts.
 function useIsMobile(breakpoint = 640) {
   const [isMobile, setIsMobile] = useState(
     typeof window !== "undefined" ? window.innerWidth < breakpoint : false
@@ -1886,6 +2375,9 @@ function useIsMobile(breakpoint = 640) {
 
 // Builds a serialisable snapshot of the current army for saving.
 // Only mutable per-instance fields are saved; static data is re-hydrated on load.
+// Serialises the army builder state into a plain object for localStorage.
+// Strips React-internal state that shouldn't be persisted (e.g. UI open/closed).
+// The `selectedDetachments` array is included so detachment choices survive reload.
 function buildArmySnapshot(factionId, armyName, pointsLimit, units) {
   return {
     id: Date.now().toString(),
@@ -1913,6 +2405,10 @@ function buildArmySnapshot(factionId, armyName, pointsLimit, units) {
 
 // Re-hydrates a saved snapshot by re-attaching static unit data from the faction registry.
 // Units whose IDs no longer exist in the data are silently dropped.
+// Reverses buildArmySnapshot. Re-links each stored unit back to
+// the live faction data (in case unit data has been updated since the save),
+// then recomputes totalPoints from the stored weapon selections.
+// Returns { factionId, name, limit, loadedUnits } ready to apply to state.
 function hydrateArmySnapshot(snapshot) {
   const factionData = FACTIONS[snapshot.factionId] || CSM_DATA;
   return {
@@ -1932,6 +2428,16 @@ function hydrateArmySnapshot(snapshot) {
 // ============================================================
 // SHARED UI COMPONENTS
 // ============================================================
+// StatBadge({ label, value, delta, accentColor })
+//   Renders one stat box (e.g. "T 4"). When delta is non-zero,
+//   shows a coloured delta indicator: green for buffs (+), red for debuffs (-).
+//   Used in both the army builder unit cards and Crusade unit cards.
+//
+// WeaponRow({ weapon, selected, disabled, onToggle, accentColor })
+//   Renders one weapon option inside a unit card. Handles the
+//   selected/unselected/disabled visual states and fires onToggle
+//   when the user taps/clicks it.
+//   disabled = true when a mutually exclusive weapon is already selected.
 
 // Renders a single characteristic badge for a unit's stat block.
 // delta: the net change from all active Honours/Scars (positive = buff, negative = debuff).
@@ -1990,8 +2496,18 @@ function WeaponRow({ weapon, selected, disabled, onToggle, accentColor = "#e0c07
 }
 
 // ============================================================
-// ARMY LIST MANAGER
+// ARMY LIST MANAGER COMPONENT
 // ============================================================
+// A modal/panel that lets the user:
+//   - See all saved army lists (name, faction, points, date)
+//   - Load a list into the builder
+//   - Rename a list
+//   - Delete a list
+//   - Start a new blank list
+//
+// Receives the full savedLists array and callbacks from ArmyBuilder.
+// Does not manage its own storage — all persistence is handled
+// by the parent (ArmyBuilder) via saveListsToStorage().
 // Full-screen overlay showing all saved army lists with load/rename/delete.
 function ArmyListManager({ savedLists, currentId, onLoad, onDelete, onRename, onNew, onClose }) {
   const [renamingId, setRenamingId] = useState(null);
@@ -2239,6 +2755,8 @@ function ArmyBuilder({ narrativeMode }) {
 
       {/* ── 11th Edition Detachment Points Panel ── */}
       {(() => {
+        // 11th Edition Detachment Points budget:
+        // 2 DP at 1,000 pts games, 3 DP at 2,000 pts games.
         const dpBudget = pointsLimit >= 2000 ? 3 : 2;
         const usedDP = selectedDetachments.reduce((sum, dName) => {
           const det = factionData.detachments.find((d) => d.name === dName);
@@ -2276,6 +2794,11 @@ function ArmyBuilder({ narrativeMode }) {
                   return d?.dpCost === 3;
                 });
                 // 3 DP detachments can't mix with others; can't pick if something already selected
+                // A detachment is blocked (unselectable) when:
+                //   - Selecting it would exceed the DP budget
+                //   - It costs 3 DP and other detachments are already selected
+                //     (3 DP detachments must be taken alone)
+                //   - It costs 1-2 DP but a 3 DP detachment is already selected
                 const blocked = !isSelected && (
                   wouldOverBudget ||
                   (is3DP && selectedDetachments.length > 0) ||
@@ -2338,7 +2861,10 @@ function ArmyBuilder({ narrativeMode }) {
 
       {/* ── Stratagem Tracker Panel ── */}
       {(() => {
-        // Gather all stratagems from currently selected detachments
+        // Gather stratagems from all currently selected detachments.
+        // stratagem.detachment must exactly match a detachment name string.
+        // If no detachments are selected, activeStratagems is empty and
+        // the panel renders nothing (guarded by the length check above).
         const activeStratagems = factionData.stratagems.filter(
           (s) => selectedDetachments.includes(s.detachment)
         );
@@ -2419,6 +2945,9 @@ function ArmyBuilder({ narrativeMode }) {
                               <div style={{ display: "flex", gap: 6, flexShrink: 0, alignItems: "center" }}>
                                 <span style={{ color: used ? "#444" : fColor, fontWeight: 700, fontSize: 13, fontFamily: "var(--font-display)" }}>{s.cost}</span>
                                 <button
+                                  // Toggle the stratagem's used state.
+                                  // We create a new Set each time (not mutate) so
+                                  // React detects the state change and re-renders.
                                   onClick={() => setUsedStratagems((prev) => {
                                     const next = new Set(prev);
                                     if (next.has(s.id)) next.delete(s.id);
@@ -2540,7 +3069,8 @@ function ArmyBuilder({ narrativeMode }) {
                 {/* Enhancements (characters only) — filtered to selected detachments */}
                 {unit.unitData.role === "CHARACTER" && (() => {
                   // Filter enhancements to those from currently selected detachments.
-                  // If no detachments selected, show nothing with a prompt instead.
+                  // enhancement.detachment must exactly match a detachment name string.
+                  // If no detachments selected, show a prompt rather than an empty list.
                   const availableEnhancements = factionData.enhancements.filter(
                     (e) => !e.detachment || selectedDetachments.includes(e.detachment)
                   );
